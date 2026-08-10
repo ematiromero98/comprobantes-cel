@@ -7,9 +7,15 @@
 <style>
 *{box-sizing:border-box}
 body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0}
-header{position:sticky;top:0;background:#1e293b;padding:12px 14px;box-shadow:0 2px 8px rgba(0,0,0,.4)}
-h1{margin:0;font-size:17px}
-#busca{width:100%;margin-top:8px;padding:10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:16px}
+header{position:sticky;top:0;background:#1e293b;padding:10px 14px;box-shadow:0 2px 8px rgba(0,0,0,.4);z-index:5}
+h1{margin:0 0 8px;font-size:16px}
+.tabs{display:flex;gap:8px;margin-bottom:8px}
+.tab{flex:1;padding:9px;border:1px solid #334155;background:#0f172a;color:#94a3b8;border-radius:8px;font-size:14px;font-weight:bold}
+.tab.active{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
+.filtros{display:flex;gap:8px}
+#empresa,#busca{padding:9px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:15px}
+#empresa{flex:0 0 42%}
+#busca{flex:1;min-width:0}
 .wrap{padding:12px 14px 40px}
 .card{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px;margin-bottom:10px}
 .card:active{background:#243247}
@@ -17,9 +23,10 @@ h1{margin:0;font-size:17px}
 .prov{font-size:15px;margin-top:2px}
 .meta{color:#94a3b8;font-size:12px;margin-top:2px}
 .saldo{color:#38bdf8;font-weight:bold;margin-top:6px}
+.tag{font-size:11px;background:#334155;color:#cbd5e1;border-radius:20px;padding:1px 7px;font-weight:normal;margin-left:4px}
 .badge{background:#334155;color:#cbd5e1;border-radius:20px;padding:2px 8px;font-size:12px}
-.muted{color:#94a3b8;text-align:center;margin-top:12px}
-.err{color:#f87171;text-align:center;margin-top:12px}
+.muted{color:#94a3b8;text-align:center;margin-top:20px}
+.err{color:#f87171;text-align:center;margin-top:20px}
 #detalle{display:none;position:fixed;inset:0;background:#0f172a;z-index:10;flex-direction:column}
 #detalle .top{background:#1e293b;padding:12px 14px;display:flex;align-items:center;gap:10px}
 #detalle .body{padding:16px;overflow:auto;flex:1}
@@ -47,8 +54,15 @@ button.big:disabled{background:#475569;color:#94a3b8}
 </div>
 
 <header>
-  <h1>Comprobantes — órdenes pendientes</h1>
-  <input id="busca" placeholder="Buscar por N°, proveedor o empresa…" oninput="render()">
+  <h1>Comprobantes de pago</h1>
+  <div class="tabs">
+    <button id="tab-pend" class="tab active" onclick="setTab('PENDIENTE')">Pendientes</button>
+    <button id="tab-pag" class="tab" onclick="setTab('PAGADA')">Pagadas</button>
+  </div>
+  <div class="filtros">
+    <select id="empresa" onchange="render()"><option value="">Todas</option></select>
+    <input id="busca" placeholder="Buscar N° / proveedor…" oninput="render()">
+  </div>
 </header>
 <div class="wrap"><div id="lista"><p class="muted">Cargando…</p></div></div>
 
@@ -66,6 +80,7 @@ button.big:disabled{background:#475569;color:#94a3b8}
 <script>
 var API = "https://zpwccecovhjmeibxafkg.supabase.co/functions/v1/comprobantes-cel";
 var PINKEY = "pin_comprobantes";
+var tab = 'PENDIENTE';
 var ordenes = [], sel = null, imgData = null;
 function pin(){ return localStorage.getItem(PINKEY) || ''; }
 function money(n){ return '$ ' + Number(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -90,25 +105,46 @@ function no401(r){
   return r;
 }
 
+function setTab(t){
+  if(t===tab) return;
+  tab=t;
+  document.getElementById('tab-pend').className='tab'+(t==='PENDIENTE'?' active':'');
+  document.getElementById('tab-pag').className='tab'+(t==='PAGADA'?' active':'');
+  document.getElementById('busca').value='';
+  cargar();
+}
+function llenarEmpresas(){
+  var sel=document.getElementById('empresa'); var prev=sel.value, set={};
+  ordenes.forEach(function(o){ if(o.empresa) set[o.empresa]=1; });
+  var emps=Object.keys(set).sort();
+  sel.innerHTML='<option value="">Todas</option>'+emps.map(function(e){return '<option>'+e+'</option>';}).join('');
+  sel.value = (prev && set[prev]) ? prev : '';
+}
 function cargar(){
   document.getElementById('lista').innerHTML='<p class="muted">Cargando…</p>';
-  fetch(API+'/pendientes',{headers:{'x-pin':pin()}})
+  fetch(API+'/ordenes?estado='+tab,{headers:{'x-pin':pin()}})
    .then(no401).then(function(r){ return r.json(); })
-   .then(function(d){ ordenes=d.ordenes||[]; render(); })
+   .then(function(d){ ordenes=d.ordenes||[]; llenarEmpresas(); render(); })
    .catch(function(e){ if(e==='pin') return; document.getElementById('lista').innerHTML='<p class="err">No se pudo cargar. Revisá la conexión y recargá.</p>'; });
 }
 function render(){
   var q=(document.getElementById('busca').value||'').toLowerCase();
+  var emp=document.getElementById('empresa').value;
   var cont=document.getElementById('lista'); cont.innerHTML='';
-  var items=ordenes.filter(function(o){ return ((o.nro_op||'')+' '+(o.proveedor||'')+' '+(o.empresa||'')).toLowerCase().indexOf(q)>=0; });
-  if(!items.length){ cont.innerHTML='<p class="muted">Sin órdenes pendientes.</p>'; return; }
+  var items=ordenes.filter(function(o){
+    if(emp && o.empresa!==emp) return false;
+    return ((o.nro_op||'')+' '+(o.proveedor||'')).toLowerCase().indexOf(q)>=0;
+  });
+  if(!items.length){ cont.innerHTML='<p class="muted">Sin órdenes.</p>'; return; }
   items.forEach(function(o){
     var d=document.createElement('div'); d.className='card';
     var badge=(o.comprobantes>0)?'<span class="badge">📎 '+o.comprobantes+'</span>':'';
+    var linea = (tab==='PENDIENTE')
+      ? '<div class="saldo">Saldo: '+money(o.saldo)+'</div>'
+      : '<div class="saldo">Total: '+money(o.total_a_pagar)+'<span class="tag">'+(o.estado_pago||'')+'</span></div>';
     d.innerHTML='<div class="row"><b>'+(o.nro_op||'')+'</b>'+badge+'</div>'+
       '<div class="prov">'+(o.proveedor||'')+'</div>'+
-      '<div class="meta">'+(o.empresa||'')+' · '+(o.fecha||'')+'</div>'+
-      '<div class="saldo">Saldo: '+money(o.saldo)+'</div>';
+      '<div class="meta">'+(o.empresa||'')+' · '+(o.fecha||'')+'</div>'+ linea;
     d.onclick=function(){ abrir(o); };
     cont.appendChild(d);
   });
