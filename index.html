@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Comprobantes de pago</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0}
+header{position:sticky;top:0;background:#1e293b;padding:12px 14px;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+h1{margin:0;font-size:17px}
+#busca{width:100%;margin-top:8px;padding:10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:16px}
+.wrap{padding:12px 14px 40px}
+.card{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px;margin-bottom:10px}
+.card:active{background:#243247}
+.row{display:flex;justify-content:space-between;align-items:center}
+.prov{font-size:15px;margin-top:2px}
+.meta{color:#94a3b8;font-size:12px;margin-top:2px}
+.saldo{color:#38bdf8;font-weight:bold;margin-top:6px}
+.badge{background:#334155;color:#cbd5e1;border-radius:20px;padding:2px 8px;font-size:12px}
+.muted{color:#94a3b8;text-align:center;margin-top:12px}
+.err{color:#f87171;text-align:center;margin-top:12px}
+#detalle{display:none;position:fixed;inset:0;background:#0f172a;z-index:10;flex-direction:column}
+#detalle .top{background:#1e293b;padding:12px 14px;display:flex;align-items:center;gap:10px}
+#detalle .body{padding:16px;overflow:auto;flex:1}
+#t-orden{font-weight:bold}
+.back{background:none;border:none;color:#38bdf8;font-size:22px}
+label.cam{display:block;text-align:center;background:#334155;border:2px dashed #475569;border-radius:12px;padding:34px 12px;font-size:16px;margin-bottom:14px}
+#file{display:none}
+#preview{max-width:100%;border-radius:10px;display:none;margin-bottom:14px}
+button.big{width:100%;padding:15px;border:none;border-radius:10px;font-size:17px;font-weight:bold;background:#0ea5e9;color:#fff}
+button.big:disabled{background:#475569;color:#94a3b8}
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#334155;color:#fff;padding:12px 18px;border-radius:24px;font-size:15px;opacity:0;transition:.25s;z-index:20}
+#toast.show{opacity:1}
+#pin-screen{display:none;position:fixed;inset:0;background:#0f172a;z-index:30;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center}
+#pin-input{width:100%;max-width:260px;padding:12px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;font-size:20px;text-align:center;letter-spacing:2px}
+</style>
+</head>
+<body>
+
+<div id="pin-screen">
+  <h1>Comprobantes de pago</h1>
+  <p class="muted">Ingresá el PIN (solo la primera vez)</p>
+  <input id="pin-input" type="password" inputmode="text" placeholder="PIN" onkeydown="if(event.key==='Enter')guardarPin()">
+  <p id="pin-err" class="err" style="display:none">PIN incorrecto</p>
+  <button class="big" style="max-width:260px;margin-top:16px" onclick="guardarPin()">Entrar</button>
+</div>
+
+<header>
+  <h1>Comprobantes — órdenes pendientes</h1>
+  <input id="busca" placeholder="Buscar por N°, proveedor o empresa…" oninput="render()">
+</header>
+<div class="wrap"><div id="lista"><p class="muted">Cargando…</p></div></div>
+
+<div id="detalle">
+  <div class="top"><button class="back" onclick="volver()">←</button><span id="t-orden"></span></div>
+  <div class="body">
+    <label class="cam" for="file">📷  Sacar / elegir foto</label>
+    <input id="file" type="file" accept="image/*" capture="environment">
+    <img id="preview">
+    <button class="big" id="btnsubir" disabled onclick="subir()">Subir foto</button>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+var API = "https://zpwccecovhjmeibxafkg.supabase.co/functions/v1/comprobantes-cel";
+var PINKEY = "pin_comprobantes";
+var ordenes = [], sel = null, imgData = null;
+function pin(){ return localStorage.getItem(PINKEY) || ''; }
+function money(n){ return '$ ' + Number(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function show(id){ document.getElementById('detalle').style.display = (id==='detalle')?'flex':'none'; }
+function volver(){ show('lista'); }
+function toast(t){ var e=document.getElementById('toast'); e.textContent=t; e.className='show'; setTimeout(function(){e.className='';},2200); }
+
+function mostrarPin(err){
+  document.getElementById('pin-err').style.display = err?'block':'none';
+  var s=document.getElementById('pin-screen'); s.style.display='flex';
+  var i=document.getElementById('pin-input'); i.value=''; i.focus();
+}
+function guardarPin(){
+  var v=document.getElementById('pin-input').value.trim();
+  if(!v) return;
+  localStorage.setItem(PINKEY, v);
+  document.getElementById('pin-screen').style.display='none';
+  cargar();
+}
+function no401(r){
+  if(r.status===401){ localStorage.removeItem(PINKEY); mostrarPin(true); throw 'pin'; }
+  return r;
+}
+
+function cargar(){
+  document.getElementById('lista').innerHTML='<p class="muted">Cargando…</p>';
+  fetch(API+'/pendientes',{headers:{'x-pin':pin()}})
+   .then(no401).then(function(r){ return r.json(); })
+   .then(function(d){ ordenes=d.ordenes||[]; render(); })
+   .catch(function(e){ if(e==='pin') return; document.getElementById('lista').innerHTML='<p class="err">No se pudo cargar. Revisá la conexión y recargá.</p>'; });
+}
+function render(){
+  var q=(document.getElementById('busca').value||'').toLowerCase();
+  var cont=document.getElementById('lista'); cont.innerHTML='';
+  var items=ordenes.filter(function(o){ return ((o.nro_op||'')+' '+(o.proveedor||'')+' '+(o.empresa||'')).toLowerCase().indexOf(q)>=0; });
+  if(!items.length){ cont.innerHTML='<p class="muted">Sin órdenes pendientes.</p>'; return; }
+  items.forEach(function(o){
+    var d=document.createElement('div'); d.className='card';
+    var badge=(o.comprobantes>0)?'<span class="badge">📎 '+o.comprobantes+'</span>':'';
+    d.innerHTML='<div class="row"><b>'+(o.nro_op||'')+'</b>'+badge+'</div>'+
+      '<div class="prov">'+(o.proveedor||'')+'</div>'+
+      '<div class="meta">'+(o.empresa||'')+' · '+(o.fecha||'')+'</div>'+
+      '<div class="saldo">Saldo: '+money(o.saldo)+'</div>';
+    d.onclick=function(){ abrir(o); };
+    cont.appendChild(d);
+  });
+}
+function abrir(o){
+  sel=o; imgData=null;
+  document.getElementById('t-orden').textContent=(o.nro_op||'')+' — '+(o.proveedor||'');
+  var p=document.getElementById('preview'); p.src=''; p.style.display='none';
+  document.getElementById('file').value='';
+  document.getElementById('btnsubir').disabled=true;
+  document.getElementById('btnsubir').textContent='Subir foto';
+  show('detalle');
+}
+document.getElementById('file').onchange=function(ev){
+  var f=ev.target.files[0]; if(!f) return;
+  var img=new Image();
+  img.onload=function(){
+    var max=1600, w=img.width, h=img.height;
+    if(w>h && w>max){ h=Math.round(h*max/w); w=max; } else if(h>=w && h>max){ w=Math.round(w*max/h); h=max; }
+    var c=document.createElement('canvas'); c.width=w; c.height=h;
+    c.getContext('2d').drawImage(img,0,0,w,h);
+    imgData=c.toDataURL('image/jpeg',0.7);
+    var p=document.getElementById('preview'); p.src=imgData; p.style.display='block';
+    document.getElementById('btnsubir').disabled=false;
+    URL.revokeObjectURL(img.src);
+  };
+  img.src=URL.createObjectURL(f);
+};
+function subir(){
+  if(!sel||!imgData) return;
+  var b=document.getElementById('btnsubir'); b.disabled=true; b.textContent='Subiendo…';
+  fetch(API+'/subir',{method:'POST',headers:{'Content-Type':'application/json','x-pin':pin()},
+    body:JSON.stringify({pago_id:sel.pago_id, data:imgData.split(',')[1]})})
+   .then(no401).then(function(r){ if(!r.ok) throw 0; return r.json(); })
+   .then(function(res){ if(res.error) throw 0; toast('✅ Comprobante subido'); volver(); cargar(); })
+   .catch(function(e){ if(e==='pin') return; b.disabled=false; b.textContent='Subir foto'; toast('❌ Error, reintentá'); });
+}
+
+if(pin()) cargar(); else mostrarPin(false);
+</script>
+</body>
+</html>
