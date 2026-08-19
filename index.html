@@ -58,6 +58,7 @@ button.big:disabled{background:#475569;color:#94a3b8}
   <div class="tabs">
     <button id="tab-pend" class="tab active" onclick="setTab('PENDIENTE')">Pendientes</button>
     <button id="tab-pag" class="tab" onclick="setTab('PAGADA')">Pagadas</button>
+    <button id="tab-ddjj" class="tab" onclick="setTab('DDJJ')">DDJJ</button>
   </div>
   <div class="filtros">
     <select id="empresa" onchange="render()"><option value="">Todas</option></select>
@@ -105,11 +106,14 @@ function no401(r){
   return r;
 }
 
+function periodoTxt(p){ p=String(p||''); return p.length>=6 ? (p.slice(4,6)+'/'+p.slice(0,4)) : p; }
 function setTab(t){
   if(t===tab) return;
   tab=t;
   document.getElementById('tab-pend').className='tab'+(t==='PENDIENTE'?' active':'');
   document.getElementById('tab-pag').className='tab'+(t==='PAGADA'?' active':'');
+  document.getElementById('tab-ddjj').className='tab'+(t==='DDJJ'?' active':'');
+  document.getElementById('busca').placeholder = (t==='DDJJ') ? 'Buscar régimen / empresa…' : 'Buscar N° / proveedor…';
   document.getElementById('busca').value='';
   cargar();
 }
@@ -122,36 +126,54 @@ function llenarEmpresas(){
 }
 function cargar(){
   document.getElementById('lista').innerHTML='<p class="muted">Cargando…</p>';
-  fetch(API+'/ordenes?estado='+tab,{headers:{'x-pin':pin()}})
+  var url = (tab==='DDJJ') ? (API+'/ddjj') : (API+'/ordenes?estado='+tab);
+  fetch(url,{headers:{'x-pin':pin()}})
    .then(no401).then(function(r){ return r.json(); })
-   .then(function(d){ ordenes=d.ordenes||[]; llenarEmpresas(); render(); })
+   .then(function(d){
+     if(tab==='DDJJ'){ ordenes=(d.ddjj||[]).map(function(x){ x._ddjj=true; return x; }); }
+     else { ordenes=d.ordenes||[]; }
+     llenarEmpresas(); render();
+   })
    .catch(function(e){ if(e==='pin') return; document.getElementById('lista').innerHTML='<p class="err">No se pudo cargar. Revisá la conexión y recargá.</p>'; });
 }
 function render(){
   var q=(document.getElementById('busca').value||'').toLowerCase();
   var emp=document.getElementById('empresa').value;
   var cont=document.getElementById('lista'); cont.innerHTML='';
+  var esDdjj=(tab==='DDJJ');
   var items=ordenes.filter(function(o){
     if(emp && o.empresa!==emp) return false;
-    return ((o.nro_op||'')+' '+(o.proveedor||'')).toLowerCase().indexOf(q)>=0;
+    var txt = esDdjj
+      ? ((o.regimen||'')+' '+(o.periodo||'')+' '+(o.quincena||'')+' '+(o.empresa||''))
+      : ((o.nro_op||'')+' '+(o.proveedor||''));
+    return txt.toLowerCase().indexOf(q)>=0;
   });
-  if(!items.length){ cont.innerHTML='<p class="muted">Sin órdenes.</p>'; return; }
+  if(!items.length){ cont.innerHTML='<p class="muted">'+(esDdjj?'Sin DDJJ pendientes de comprobante.':'Sin órdenes.')+'</p>'; return; }
   items.forEach(function(o){
     var d=document.createElement('div'); d.className='card';
-    var badge=(o.comprobantes>0)?'<span class="badge">📎 '+o.comprobantes+'</span>':'';
-    var linea = (tab==='PENDIENTE')
-      ? '<div class="saldo">Saldo: '+money(o.saldo)+'</div>'
-      : '<div class="saldo">Total: '+money(o.total_a_pagar)+'<span class="tag">'+(o.estado_pago||'')+'</span></div>';
-    d.innerHTML='<div class="row"><b>'+(o.nro_op||'')+'</b>'+badge+'</div>'+
-      '<div class="prov">'+(o.proveedor||'')+'</div>'+
-      '<div class="meta">'+(o.empresa||'')+' · '+(o.fecha||'')+'</div>'+ linea;
+    if(esDdjj){
+      d.innerHTML='<div class="row"><b>'+(o.regimen||'')+'</b><span class="tag">'+(o.quincena||'')+'</span></div>'+
+        '<div class="prov">'+(o.empresa||'')+'</div>'+
+        '<div class="meta">Período '+periodoTxt(o.periodo)+(o.fecha?(' · pago '+o.fecha):'')+'</div>'+
+        '<div class="saldo">'+money(o.monto)+'</div>';
+    } else {
+      var badge=(o.comprobantes>0)?'<span class="badge">📎 '+o.comprobantes+'</span>':'';
+      var linea = (tab==='PENDIENTE')
+        ? '<div class="saldo">Saldo: '+money(o.saldo)+'</div>'
+        : '<div class="saldo">Total: '+money(o.total_a_pagar)+'<span class="tag">'+(o.estado_pago||'')+'</span></div>';
+      d.innerHTML='<div class="row"><b>'+(o.nro_op||'')+'</b>'+badge+'</div>'+
+        '<div class="prov">'+(o.proveedor||'')+'</div>'+
+        '<div class="meta">'+(o.empresa||'')+' · '+(o.fecha||'')+'</div>'+ linea;
+    }
     d.onclick=function(){ abrir(o); };
     cont.appendChild(d);
   });
 }
 function abrir(o){
   sel=o; imgData=null;
-  document.getElementById('t-orden').textContent=(o.nro_op||'')+' — '+(o.proveedor||'');
+  document.getElementById('t-orden').textContent = o._ddjj
+    ? ((o.regimen||'')+' '+(o.quincena||'')+' · '+periodoTxt(o.periodo)+' — '+(o.empresa||''))
+    : ((o.nro_op||'')+' — '+(o.proveedor||''));
   var p=document.getElementById('preview'); p.src=''; p.style.display='none';
   document.getElementById('file').value='';
   document.getElementById('btnsubir').disabled=true;
@@ -176,7 +198,8 @@ document.getElementById('file').onchange=function(ev){
 function subir(){
   if(!sel||!imgData) return;
   var b=document.getElementById('btnsubir'); b.disabled=true; b.textContent='Subiendo…';
-  fetch(API+'/subir',{method:'POST',headers:{'Content-Type':'application/json','x-pin':pin()},
+  var ep = sel._ddjj ? '/subir-ddjj' : '/subir';
+  fetch(API+ep,{method:'POST',headers:{'Content-Type':'application/json','x-pin':pin()},
     body:JSON.stringify({pago_id:sel.pago_id, data:imgData.split(',')[1]})})
    .then(no401).then(function(r){ if(!r.ok) throw 0; return r.json(); })
    .then(function(res){ if(res.error) throw 0; toast('✅ Comprobante subido'); volver(); cargar(); })
