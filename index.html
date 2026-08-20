@@ -109,12 +109,13 @@ function no401(r){
 // Edge Function puede tener cold-start. Sin esto, un solo blip dejaba la pantalla
 // clavada en "No se pudo cargar" sin recuperarse. Cada intento usa su propio
 // AbortController (un signal ya abortado no se puede reusar).
-function fetchJSON(url, opts, intentos){
+function fetchJSON(url, opts, intentos, ms){
   opts = opts || {};
   intentos = (intentos==null) ? 2 : intentos;
+  ms = ms || 20000;                          // subir fotos en redes lentas tarda
   function attempt(n){
     var ctrl = new AbortController();
-    var t = setTimeout(function(){ ctrl.abort(); }, 15000);
+    var t = setTimeout(function(){ ctrl.abort(); }, ms);
     var o = {}; for(var k in opts){ if(k!=='signal') o[k]=opts[k]; }
     o.signal = ctrl.signal;
     return fetch(url, o)
@@ -230,11 +231,20 @@ function subir(){
   if(!sel||!imgData) return;
   var b=document.getElementById('btnsubir'); b.disabled=true; b.textContent='Subiendo…';
   var ep = sel._ddjj ? '/subir-ddjj' : '/subir';
+  // 1 reintento y timeout 45s: subir una foto por datos móviles lentos tarda.
   fetchJSON(API+ep,{method:'POST',headers:{'Content-Type':'application/json','x-pin':pin()},
-    body:JSON.stringify({pago_id:sel.pago_id, data:imgData.split(',')[1]})}, 1)
-   .then(no401).then(function(r){ if(!r.ok) throw 0; return r.json(); })
-   .then(function(res){ if(res.error) throw 0; toast('✅ Comprobante subido'); volver(); cargar(); })
-   .catch(function(e){ if(e==='pin') return; b.disabled=false; b.textContent='Subir foto'; toast('❌ Error, reintentá'); });
+    body:JSON.stringify({pago_id:sel.pago_id, data:imgData.split(',')[1]})}, 1, 45000)
+   .then(no401).then(function(r){ return r.json().catch(function(){ return {}; }); })
+   .then(function(res){
+     if(res && res.error){ throw new Error(res.error); }
+     toast('✅ Comprobante subido'); volver(); cargar();
+   })
+   .catch(function(e){
+     if(e==='pin') return;
+     b.disabled=false; b.textContent='Subir foto';
+     var msg = (e && e.message) ? e.message : 'reintentá';
+     toast('❌ ' + msg);
+   });
 }
 
 if(pin()) cargar(); else mostrarPin(false);
