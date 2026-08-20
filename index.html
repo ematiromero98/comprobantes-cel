@@ -105,6 +105,28 @@ function no401(r){
   if(r.status===401){ localStorage.removeItem(PINKEY); mostrarPin(true); throw 'pin'; }
   return r;
 }
+// fetch con timeout + reintentos: las redes de celular tienen micro-cortes y la
+// Edge Function puede tener cold-start. Sin esto, un solo blip dejaba la pantalla
+// clavada en "No se pudo cargar" sin recuperarse. Cada intento usa su propio
+// AbortController (un signal ya abortado no se puede reusar).
+function fetchJSON(url, opts, intentos){
+  opts = opts || {};
+  intentos = (intentos==null) ? 2 : intentos;
+  function attempt(n){
+    var ctrl = new AbortController();
+    var t = setTimeout(function(){ ctrl.abort(); }, 15000);
+    var o = {}; for(var k in opts){ if(k!=='signal') o[k]=opts[k]; }
+    o.signal = ctrl.signal;
+    return fetch(url, o)
+      .then(function(r){ clearTimeout(t); return r; })
+      .catch(function(err){
+        clearTimeout(t);
+        if(n>0){ return new Promise(function(res){ setTimeout(res,1200); }).then(function(){ return attempt(n-1); }); }
+        throw err;
+      });
+  }
+  return attempt(intentos);
+}
 
 function periodoTxt(p){ p=String(p||''); return p.length>=6 ? (p.slice(4,6)+'/'+p.slice(0,4)) : p; }
 function setTab(t){
@@ -127,14 +149,23 @@ function llenarEmpresas(){
 function cargar(){
   document.getElementById('lista').innerHTML='<p class="muted">Cargando…</p>';
   var url = (tab==='DDJJ') ? (API+'/ddjj') : (API+'/ordenes?estado='+tab);
-  fetch(url,{headers:{'x-pin':pin()}})
+  fetchJSON(url,{headers:{'x-pin':pin()}})
    .then(no401).then(function(r){ return r.json(); })
    .then(function(d){
+     if(d && d.error){ throw new Error(d.error); }
      if(tab==='DDJJ'){ ordenes=(d.ddjj||[]).map(function(x){ x._ddjj=true; return x; }); }
      else { ordenes=d.ordenes||[]; }
      llenarEmpresas(); render();
    })
-   .catch(function(e){ if(e==='pin') return; document.getElementById('lista').innerHTML='<p class="err">No se pudo cargar. Revisá la conexión y recargá.</p>'; });
+   .catch(function(e){
+     if(e==='pin') return;
+     var msg = (e && e.message) ? e.message : 'Revisá la conexión.';
+     document.getElementById('lista').innerHTML =
+       '<div class="err">No se pudo cargar.'+
+       '<div class="muted" style="font-size:12px;margin-top:4px">'+msg+'</div>'+
+       '<button class="big" style="max-width:220px;margin:16px auto 0" onclick="cargar()">🔄 Reintentar</button>'+
+       '</div>';
+   });
 }
 function render(){
   var q=(document.getElementById('busca').value||'').toLowerCase();
@@ -199,8 +230,8 @@ function subir(){
   if(!sel||!imgData) return;
   var b=document.getElementById('btnsubir'); b.disabled=true; b.textContent='Subiendo…';
   var ep = sel._ddjj ? '/subir-ddjj' : '/subir';
-  fetch(API+ep,{method:'POST',headers:{'Content-Type':'application/json','x-pin':pin()},
-    body:JSON.stringify({pago_id:sel.pago_id, data:imgData.split(',')[1]})})
+  fetchJSON(API+ep,{method:'POST',headers:{'Content-Type':'application/json','x-pin':pin()},
+    body:JSON.stringify({pago_id:sel.pago_id, data:imgData.split(',')[1]})}, 1)
    .then(no401).then(function(r){ if(!r.ok) throw 0; return r.json(); })
    .then(function(res){ if(res.error) throw 0; toast('✅ Comprobante subido'); volver(); cargar(); })
    .catch(function(e){ if(e==='pin') return; b.disabled=false; b.textContent='Subir foto'; toast('❌ Error, reintentá'); });
