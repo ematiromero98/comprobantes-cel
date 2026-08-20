@@ -12,10 +12,10 @@ h1{margin:0 0 8px;font-size:16px}
 .tabs{display:flex;gap:8px;margin-bottom:8px}
 .tab{flex:1;padding:9px;border:1px solid #334155;background:#0f172a;color:#94a3b8;border-radius:8px;font-size:14px;font-weight:bold}
 .tab.active{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
-.filtros{display:flex;gap:8px}
-#empresa,#busca{padding:9px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:15px}
-#empresa{flex:0 0 42%}
-#busca{flex:1;min-width:0}
+.filtros{display:flex;gap:8px;flex-wrap:wrap}
+#empresa,#periodo,#busca{padding:9px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:15px}
+#empresa,#periodo{flex:1 1 40%;min-width:0}
+#busca{flex:1 1 100%;min-width:0}
 .wrap{padding:12px 14px 40px}
 .card{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px;margin-bottom:10px}
 .card:active{background:#243247}
@@ -62,6 +62,7 @@ button.big:disabled{background:#475569;color:#94a3b8}
   </div>
   <div class="filtros">
     <select id="empresa" onchange="render()"><option value="">Todas</option></select>
+    <select id="periodo" onchange="render()" style="display:none"><option value="">Todos</option></select>
     <input id="busca" placeholder="Buscar N° / proveedor…" oninput="render()">
   </div>
 </header>
@@ -138,7 +139,15 @@ function setTab(t){
   document.getElementById('tab-ddjj').className='tab'+(t==='DDJJ'?' active':'');
   document.getElementById('busca').placeholder = (t==='DDJJ') ? 'Buscar régimen / empresa…' : 'Buscar N° / proveedor…';
   document.getElementById('busca').value='';
+  document.getElementById('periodo').style.display = (t==='DDJJ') ? '' : 'none';
   cargar();
+}
+function llenarPeriodos(){
+  var sel=document.getElementById('periodo'); var prev=sel.value, set={};
+  ordenes.forEach(function(o){ if(o.periodo) set[o.periodo]=1; });
+  var ps=Object.keys(set).sort().reverse();
+  sel.innerHTML='<option value="">Todos los períodos</option>'+ps.map(function(p){return '<option value="'+p+'">'+periodoTxt(p)+'</option>';}).join('');
+  sel.value=(prev && set[prev])?prev:'';
 }
 function llenarEmpresas(){
   var sel=document.getElementById('empresa'); var prev=sel.value, set={};
@@ -156,7 +165,7 @@ function cargar(){
      if(d && d.error){ throw new Error(d.error); }
      if(tab==='DDJJ'){ ordenes=(d.ddjj||[]).map(function(x){ x._ddjj=true; return x; }); }
      else { ordenes=d.ordenes||[]; }
-     llenarEmpresas(); render();
+     llenarEmpresas(); if(tab==='DDJJ') llenarPeriodos(); render();
    })
    .catch(function(e){
      if(e==='pin') return;
@@ -171,20 +180,25 @@ function cargar(){
 function render(){
   var q=(document.getElementById('busca').value||'').toLowerCase();
   var emp=document.getElementById('empresa').value;
+  var per=document.getElementById('periodo').value;
   var cont=document.getElementById('lista'); cont.innerHTML='';
   var esDdjj=(tab==='DDJJ');
   var items=ordenes.filter(function(o){
     if(emp && o.empresa!==emp) return false;
+    if(esDdjj && per && o.periodo!==per) return false;
     var txt = esDdjj
       ? ((o.regimen||'')+' '+(o.periodo||'')+' '+(o.quincena||'')+' '+(o.empresa||''))
       : ((o.nro_op||'')+' '+(o.proveedor||''));
     return txt.toLowerCase().indexOf(q)>=0;
   });
-  if(!items.length){ cont.innerHTML='<p class="muted">'+(esDdjj?'Sin DDJJ pendientes de comprobante.':'Sin órdenes.')+'</p>'; return; }
+  if(!items.length){ cont.innerHTML='<p class="muted">'+(esDdjj?'Sin DDJJ para ese filtro.':'Sin órdenes.')+'</p>'; return; }
   items.forEach(function(o){
     var d=document.createElement('div'); d.className='card';
     if(esDdjj){
-      d.innerHTML='<div class="row"><b>'+(o.regimen||'')+'</b><span class="tag">'+(o.quincena||'')+'</span></div>'+
+      var estado = o.pagada
+        ? '<span class="badge" style="background:#14532d;color:#86efac">✓ Comprobante</span>'
+        : '<span class="badge" style="background:#3b2f13;color:#fbbf24">📎 Pendiente</span>';
+      d.innerHTML='<div class="row"><b>'+(o.regimen||'')+'</b><span>'+estado+' <span class="tag">'+(o.quincena||'')+'</span></span></div>'+
         '<div class="prov">'+(o.empresa||'')+'</div>'+
         '<div class="meta">Período '+periodoTxt(o.periodo)+(o.fecha?(' · pago '+o.fecha):'')+'</div>'+
         '<div class="saldo">'+money(o.monto)+'</div>';
@@ -197,7 +211,10 @@ function render(){
         '<div class="prov">'+(o.proveedor||'')+'</div>'+
         '<div class="meta">'+(o.empresa||'')+' · '+(o.fecha||'')+'</div>'+ linea;
     }
-    d.onclick=function(){ abrir(o); };
+    d.onclick=function(){
+      if(esDdjj && o.pagada){ toast('✓ Esta DDJJ ya tiene comprobante'); return; }
+      abrir(o);
+    };
     cont.appendChild(d);
   });
 }
