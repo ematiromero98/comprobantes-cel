@@ -75,6 +75,59 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true });
     }
 
+    // ── DDJJ PROPIAS (Anticipos / CM03 / IVA): pagadas + pendientes ───────
+    // Son las DDJJ que el estudio paga por sí mismo (tabla ddjj_propias), no
+    // las de agente de recaudación. Se listan todas con `pagada` (= ya tiene
+    // comprobante), igual que /ddjj, para ver y no re-subir.
+    if (req.method === "GET" && path.endsWith("/ddjj-propias")) {
+      if (!(await pinOk(req))) return json({ error: "pin" }, 401);
+      const { data, error } = await supabase
+        .from("ddjj_propias")
+        .select("id, empresa, impuesto, periodo, monto, fecha_pago, comprobante_path")
+        .order("empresa", { ascending: true })
+        .order("periodo", { ascending: true });
+      if (error) return json({ error: error.message }, 500);
+      const ddjj = (data ?? []).map((r) => ({
+        pago_id: r.id, empresa: r.empresa, impuesto: r.impuesto,
+        periodo: r.periodo, monto: r.monto, fecha: r.fecha_pago,
+        pagada: !!r.comprobante_path, comprobante: r.comprobante_path,
+      }));
+      return json({ ddjj });
+    }
+
+    // ── Subir foto del pago de una DDJJ PROPIA ────────────────────────────
+    // Sube al bucket de PDFs y setea ddjj_propias.comprobante_path (misma key
+    // que lee "Pagos → DDJJ" del escritorio). Idempotente por comprobante NULL.
+    if (req.method === "POST" && path.endsWith("/subir-ddjj-propias")) {
+      if (!(await pinOk(req))) return json({ error: "pin" }, 401);
+      const body = await req.json();
+      const pago_id = Number(body.pago_id);
+      const data = String(body.data || "");
+      if (!pago_id || !data) return json({ error: "faltan datos" }, 400);
+
+      const { data: row, error: qerr } = await supabase
+        .from("ddjj_propias")
+        .select("id, empresa, impuesto, periodo, comprobante_path")
+        .eq("id", pago_id).single();
+      if (qerr || !row) return json({ error: "DDJJ no encontrada" }, 404);
+      if (row.comprobante_path) return json({ error: "ya tiene comprobante" }, 409);
+
+      const per = String(row.periodo || "");
+      const anioMes = per.length >= 6 ? per.slice(0, 4) + "-" + per.slice(4, 6) : "sin-periodo";
+      const lote = "DDJJP-" + row.impuesto + "-" + row.periodo;
+      const archivo = row.empresa + "/" + anioMes + "/comprobantes/" + lote + "_p" + pago_id + ".jpg";
+
+      const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+      const up = await supabase.storage.from(DDJJ_BUCKET).upload(archivo, bytes, { contentType: "image/jpeg", upsert: true });
+      if (up.error) return json({ error: up.error.message }, 500);
+
+      const upd = await supabase.from("ddjj_propias")
+        .update({ comprobante_path: archivo })
+        .eq("id", pago_id).is("comprobante_path", null);
+      if (upd.error) return json({ error: upd.error.message }, 500);
+      return json({ ok: true });
+    }
+
     // ── Subir foto del pago de una DDJJ ───────────────────────────────────
     // La sube al bucket de PDFs y setea ddjj_recaudacion_pagos.comprobante_path
     // (igual que adjuntar_comprobante_ddjj del escritorio, que lee esa key).
@@ -111,7 +164,7 @@ Deno.serve(async (req: Request) => {
 
     return json({
       ok: true,
-      info: "API comprobantes-cel: GET /ordenes?estado=PENDIENTE|PAGADA, GET /ddjj, POST /subir, POST /subir-ddjj (header x-pin)",
+      info: "API comprobantes-cel: GET /ordenes?estado=PENDIENTE|PAGADA, GET /ddjj, GET /ddjj-propias, POST /subir, POST /subir-ddjj, POST /subir-ddjj-propias (header x-pin)",
     });
   } catch (e) {
     return json({ error: String(e) }, 500);
