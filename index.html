@@ -36,7 +36,9 @@ h1{margin:0 0 8px;font-size:16px}
 #t-orden{font-weight:bold}
 .back{background:none;border:none;color:#38bdf8;font-size:22px}
 label.cam{display:block;text-align:center;background:#334155;border:2px dashed #475569;border-radius:12px;padding:34px 12px;font-size:16px;margin-bottom:14px}
-#file{display:none}
+/* Oculto pero RENDERIZADO: con display:none, iOS Safari no dispara el selector
+   de archivo al tocar el label (hay que tocar varias veces). Así se abre al toque. */
+#file{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0 0 0 0)}
 #preview{max-width:100%;border-radius:10px;display:none;margin-bottom:14px}
 button.big{width:100%;padding:15px;border:none;border-radius:10px;font-size:17px;font-weight:bold;background:#0ea5e9;color:#fff}
 button.big:disabled{background:#475569;color:#94a3b8}
@@ -80,8 +82,8 @@ button.big:disabled{background:#475569;color:#94a3b8}
 <div id="detalle">
   <div class="top"><button class="back" onclick="volver()">←</button><span id="t-orden"></span></div>
   <div class="body">
-    <label class="cam" for="file">📷  Sacar / elegir foto</label>
-    <input id="file" type="file" accept="image/*" capture="environment">
+    <label class="cam" for="file">📷  Sacar foto  ·  🖼️ elegir de galería</label>
+    <input id="file" type="file" accept="image/*">
     <img id="preview">
     <button class="big" id="btnsubir" disabled onclick="subir()">Subir foto</button>
   </div>
@@ -269,20 +271,54 @@ function abrir(o){
   document.getElementById('btnsubir').textContent='Subir foto';
   show('detalle');
 }
-document.getElementById('file').onchange=function(ev){
-  var f=ev.target.files[0]; if(!f) return;
-  var img=new Image();
-  img.onload=function(){
-    var max=1600, w=img.width, h=img.height;
+// Procesar la foto elegida. iPhone (Safari) difiere de Android: manda HEIC, aplica
+// orientación EXIF y su canvas a veces devuelve vacío. Por eso se intenta
+// redimensionar a JPEG por varios caminos y, si TODO falla, se sube el archivo tal
+// cual — nunca se queda en un error mudo con el botón trabado.
+function _prevListo(dataUrl){
+  imgData=dataUrl;
+  var p=document.getElementById('preview'); p.src=dataUrl; p.style.display='block';
+  var b=document.getElementById('btnsubir'); b.disabled=false; b.textContent='Subir foto';
+}
+function _subirCrudo(f){                       // último recurso: el archivo sin tocar
+  if(f.size > 9*1024*1024){ toast('❌ La foto es muy pesada; bajá la calidad y reintentá'); return; }
+  var rd=new FileReader();
+  rd.onload=function(){ _prevListo(rd.result); };
+  rd.onerror=function(){ toast('❌ No se pudo leer la foto, probá de nuevo'); };
+  rd.readAsDataURL(f);
+}
+function _redim(src, w0, h0, f){
+  try{
+    var max=1600, w=w0, h=h0;
     if(w>h && w>max){ h=Math.round(h*max/w); w=max; } else if(h>=w && h>max){ w=Math.round(w*max/h); h=max; }
     var c=document.createElement('canvas'); c.width=w; c.height=h;
-    c.getContext('2d').drawImage(img,0,0,w,h);
-    imgData=c.toDataURL('image/jpeg',0.7);
-    var p=document.getElementById('preview'); p.src=imgData; p.style.display='block';
-    document.getElementById('btnsubir').disabled=false;
-    URL.revokeObjectURL(img.src);
-  };
-  img.src=URL.createObjectURL(f);
+    c.getContext('2d').drawImage(src,0,0,w,h);
+    var url=c.toDataURL('image/jpeg',0.7);
+    if(!url || url.length<200){ _subirCrudo(f); return; }   // iOS: canvas vino vacío
+    _prevListo(url);
+  }catch(e){ _subirCrudo(f); }
+}
+function _viaImg(f){                            // camino clásico <img> (con timeout + onerror)
+  var img=new Image(), url=URL.createObjectURL(f);
+  var to=setTimeout(function(){ img.onload=img.onerror=null; try{URL.revokeObjectURL(url);}catch(_){}; _subirCrudo(f); }, 8000);
+  img.onload=function(){ clearTimeout(to); _redim(img,img.width,img.height,f); try{URL.revokeObjectURL(url);}catch(_){}; };
+  img.onerror=function(){ clearTimeout(to); try{URL.revokeObjectURL(url);}catch(_){}; _subirCrudo(f); };
+  img.src=url;
+}
+function procesarFoto(f){
+  var b=document.getElementById('btnsubir'); b.disabled=true; b.textContent='Procesando…';
+  // createImageBitmap decodifica HEIC en Safari y respeta la orientación; si no
+  // está o falla, cae a <img>, y si eso también falla, al archivo crudo.
+  if(window.createImageBitmap){
+    createImageBitmap(f).then(function(bmp){
+      _redim(bmp, bmp.width, bmp.height, f);
+      if(bmp.close) bmp.close();
+    }).catch(function(){ _viaImg(f); });
+  } else { _viaImg(f); }
+}
+document.getElementById('file').onchange=function(ev){
+  var f=ev.target.files && ev.target.files[0]; if(!f) return;
+  procesarFoto(f);
 };
 function subir(){
   if(!sel||!imgData) return;
