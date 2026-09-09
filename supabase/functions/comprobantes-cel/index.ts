@@ -1,3 +1,7 @@
+// Auth por PIN (header x-pin vs app_config.pin_comprobantes) + service_role del
+// lado servidor. DECISIÓN DE AUDITORÍA (sep-2026): el PIN se dejó A PROPÓSITO;
+// migrar a Supabase Auth por persona (trazabilidad + rate-limit) quedó como mejora
+// futura y se decidió NO hacerlo por ahora. Riesgo aceptado y documentado.
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const supabase = createClient(
