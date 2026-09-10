@@ -38,6 +38,18 @@ async function pinOk(req: Request): Promise<boolean> {
 // PDFs). El escritorio los abre con download_pdf(comprobante_path) desde acá.
 const DDJJ_BUCKET = "pdfs";
 
+// Nombre lindo para un certificado a partir del archivo (NRO-OP_CERT_XXX.pdf).
+function nombreCert(fname: string, nro_op: string): string {
+  const suf = fname.replace(nro_op + "_", "").replace(/\.pdf$/i, "");
+  const map: Record<string, string> = {
+    CERT_GANANCIAS: "Cert. Ganancias",
+    CERT_IVA: "Cert. IVA",
+    CERT_IIBB_CABA: "Cert. IIBB CABA",
+    CERT_IIBB_ARBA: "Cert. IIBB ARBA",
+  };
+  return map[suf] || suf.replace(/_/g, " ");
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   const url = new URL(req.url);
@@ -166,9 +178,102 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true });
     }
 
+    // ── VER documentos: URLs firmadas de todo lo guardado (solo lectura) ──
+    // Órdenes → OP + certificados + comprobantes (escritorio y celular).
+    // DDJJ    → el comprobante del pago (lo único que se sube).
+    if (req.method === "GET" && path.endsWith("/archivos")) {
+      if (!(await pinOk(req))) return json({ error: "pin" }, 401);
+      const tipo = (url.searchParams.get("tipo") || "").toLowerCase();
+      const archivos: Array<{ nombre: string; tipo: string; pdf: boolean; url: string }> = [];
+
+      async function firmar(bucket: string, p: string, nombre: string, clase: string) {
+        const { data, error } = await supabase.storage.from(bucket).createSignedUrl(p, 3600);
+        if (error || !data?.signedUrl) return;
+        archivos.push({ nombre, tipo: clase, pdf: p.toLowerCase().endsWith(".pdf"), url: data.signedUrl });
+      }
+
+      // ── DDJJ (recaudación o propias): solo el comprobante_path del pago ──
+      if (tipo === "ddjj" || tipo === "ddjjp") {
+        const pago_id = Number(url.searchParams.get("pago_id"));
+        if (!pago_id) return json({ error: "faltan datos" }, 400);
+        const tabla = tipo === "ddjjp" ? "ddjj_propias" : "ddjj_recaudacion_pagos";
+        const { data: row, error } = await supabase.from(tabla)
+          .select("comprobante_path").eq("id", pago_id).single();
+        if (error || !row) return json({ error: "DDJJ no encontrada" }, 404);
+        if (row.comprobante_path) {
+          await firmar(DDJJ_BUCKET, row.comprobante_path, "Comprobante del pago", "comprobante");
+        }
+        return json({ archivos });
+      }
+
+      // ── Órdenes de pago: se arma por listado de Storage (sin depender de la
+      //    forma exacta de la RPC). Paths deterministas EMPRESA/AAAA-MM/... ──
+      if (tipo === "orden") {
+        const empresa = (url.searchParams.get("empresa") || "").trim();
+        const nro_op = (url.searchParams.get("nro_op") || "").trim();
+        const fecha = (url.searchParams.get("fecha") || "").trim();
+        const pago_id = Number(url.searchParams.get("pago_id"));
+        if (!empresa || !nro_op) return json({ error: "faltan datos" }, 400);
+
+        const meses = new Set<string>();
+        const m1 = fecha.match(/(\d{4})-(\d{2})/);            // YYYY-MM-DD
+        if (m1) meses.add(`${m1[1]}-${m1[2]}`);
+        const m2 = fecha.match(/(\d{2})\/(\d{2})\/(\d{4})/);  // DD/MM/YYYY
+        if (m2) meses.add(`${m2[3]}-${m2[2]}`);
+
+        async function scanMes(mes: string) {
+          const base = `${empresa}/${mes}`;
+          const { data: files } = await supabase.storage.from("pdfs").list(base, { limit: 200 });
+          for (const f of files || []) {
+            const nm = f.name || "";
+            if (!nm.toLowerCase().endsWith(".pdf")) continue;
+            if (nm === `${nro_op}.pdf`) {
+              await firmar("pdfs", `${base}/${nm}`, "Orden de pago", "op");
+            } else if (nm.startsWith(`${nro_op}_CERT_`)) {
+              await firmar("pdfs", `${base}/${nm}`, nombreCert(nm, nro_op), "cert");
+            }
+          }
+          const { data: comps } = await supabase.storage.from("pdfs").list(`${base}/comprobantes`, { limit: 200 });
+          let n = 0;
+          for (const c of comps || []) {
+            if (c.name && c.name.startsWith(`${nro_op}_p`)) {
+              n++;
+              await firmar("pdfs", `${base}/comprobantes/${c.name}`, "Comprobante de pago" + (n > 1 ? ` ${n}` : ""), "comprobante");
+            }
+          }
+        }
+
+        for (const mes of meses) await scanMes(mes);
+        // Si la fecha no ayudó (formato raro / OP vieja), recorrer los meses de la empresa.
+        if (!archivos.length) {
+          const { data: subs } = await supabase.storage.from("pdfs").list(empresa, { limit: 200 });
+          for (const s of subs || []) {
+            if (s.name && /^\d{4}-\d{2}$/.test(s.name) && !meses.has(s.name)) await scanMes(s.name);
+          }
+        }
+
+        // Comprobantes subidos desde el celular (bucket 'comprobantes', por pago_id).
+        if (pago_id) {
+          const { data: cel } = await supabase.storage.from("comprobantes").list(String(pago_id), { limit: 200 });
+          let n = 0;
+          for (const c of cel || []) {
+            if (!c.name) continue;
+            n++;
+            await firmar("comprobantes", `${pago_id}/${c.name}`, "Comprobante (celular)" + (n > 1 ? ` ${n}` : ""), "comprobante");
+          }
+        }
+
+        const prio: Record<string, number> = { op: 0, cert: 1, comprobante: 2 };
+        archivos.sort((a, b) => (prio[a.tipo] ?? 9) - (prio[b.tipo] ?? 9));
+        return json({ archivos });
+      }
+
+      return json({ error: "tipo inválido" }, 400);
+    }
+
     return json({
       ok: true,
-      info: "API comprobantes-cel: GET /ordenes?estado=PENDIENTE|PAGADA, GET /ddjj, GET /ddjj-propias, POST /subir, POST /subir-ddjj, POST /subir-ddjj-propias (header x-pin)",
+      info: "API comprobantes-cel: GET /ordenes?estado=PENDIENTE|PAGADA, GET /ddjj, GET /ddjj-propias, GET /archivos?tipo=orden|ddjj|ddjjp, POST /subir, POST /subir-ddjj, POST /subir-ddjj-propias (header x-pin)",
     });
   } catch (e) {
     return json({ error: String(e) }, 500);

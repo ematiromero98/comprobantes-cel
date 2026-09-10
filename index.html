@@ -42,6 +42,22 @@ label.cam{display:block;text-align:center;background:#334155;border:2px dashed #
 #preview{max-width:100%;border-radius:10px;display:none;margin-bottom:14px}
 button.big{width:100%;padding:15px;border:none;border-radius:10px;font-size:17px;font-weight:bold;background:#0ea5e9;color:#fff}
 button.big:disabled{background:#475569;color:#94a3b8}
+/* Bloque "Documentos" dentro del detalle: lista de archivos guardados. */
+.doc-h{font-size:13px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin:2px 0 8px}
+.doc{display:flex;align-items:center;gap:10px;background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px;margin-bottom:8px;cursor:pointer}
+.doc:active{background:#243247}
+.doc .ic{font-size:20px}
+.doc .nm{flex:1;font-size:14px;line-height:1.2}
+.doc .go{color:#38bdf8;font-size:18px}
+.sep{border:none;border-top:1px solid #334155;margin:18px 0 14px}
+/* Visor a pantalla completa (imagen o PDF). */
+#visor{display:none;position:fixed;inset:0;background:#0b1220;z-index:40;flex-direction:column}
+#visor .top{background:#1e293b;padding:10px 12px;display:flex;align-items:center;gap:10px}
+#visor .top .nm{flex:1;font-size:14px;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#visor .top a{color:#38bdf8;font-size:13px;text-decoration:none;white-space:nowrap}
+#visor .cont{flex:1;overflow:auto;display:flex;align-items:flex-start;justify-content:center}
+#visor img{max-width:100%;height:auto;display:block}
+#visor iframe{width:100%;height:100%;border:none;background:#fff}
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#334155;color:#fff;padding:12px 18px;border-radius:24px;font-size:15px;opacity:0;transition:.25s;z-index:20}
 #toast.show{opacity:1}
 #pin-screen{display:none;position:fixed;inset:0;background:#0f172a;z-index:30;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center}
@@ -82,11 +98,27 @@ button.big:disabled{background:#475569;color:#94a3b8}
 <div id="detalle">
   <div class="top"><button class="back" onclick="volver()">←</button><span id="t-orden"></span></div>
   <div class="body">
-    <label class="cam" for="file">📷  Sacar foto  ·  🖼️ elegir de galería</label>
-    <input id="file" type="file" accept="image/*">
-    <img id="preview">
-    <button class="big" id="btnsubir" disabled onclick="subir()">Subir foto</button>
+    <div id="docs-wrap" style="display:none">
+      <div class="doc-h">Documentos</div>
+      <div id="docs"><p class="muted" style="margin-top:0">Cargando documentos…</p></div>
+    </div>
+    <div id="subir-wrap">
+      <hr class="sep" id="sep-subir" style="display:none">
+      <label class="cam" for="file">📷  Sacar foto  ·  🖼️ elegir de galería</label>
+      <input id="file" type="file" accept="image/*">
+      <img id="preview">
+      <button class="big" id="btnsubir" disabled onclick="subir()">Subir foto</button>
+    </div>
   </div>
+</div>
+
+<div id="visor">
+  <div class="top">
+    <button class="back" onclick="cerrarVisor()">←</button>
+    <span class="nm" id="v-nombre"></span>
+    <a id="v-abrir" href="#" target="_blank" rel="noopener">Abrir en pestaña ↗</a>
+  </div>
+  <div class="cont" id="v-cont"></div>
 </div>
 <div id="toast"></div>
 
@@ -251,10 +283,7 @@ function render(){
         '<div class="prov">'+(o.proveedor||'')+'</div>'+
         '<div class="meta">'+(o.empresa||'')+' · '+(o.fecha||'')+'</div>'+ linea;
     }
-    d.onclick=function(){
-      if(fisc && o.pagada){ toast('✓ Esta DDJJ ya tiene comprobante'); return; }
-      abrir(o);
-    };
+    d.onclick=function(){ abrir(o); };
     cont.appendChild(d);
   });
 }
@@ -269,7 +298,72 @@ function abrir(o){
   document.getElementById('file').value='';
   document.getElementById('btnsubir').disabled=true;
   document.getElementById('btnsubir').textContent='Subir foto';
+
+  // Qué mostrar: las órdenes siempre dejan ver documentos y subir (comprobantes
+  // parciales). Una DDJJ ya pagada solo se ve (no se re-sube); una pendiente
+  // solo sube (todavía no hay nada que ver).
+  var esFisc = !!(o._ddjj || o._ddjjp);
+  var permiteSubir = esFisc ? !o.pagada : true;
+  var mostrarDocs  = esFisc ? !!o.pagada : true;
+  document.getElementById('subir-wrap').style.display = permiteSubir ? 'block' : 'none';
+  document.getElementById('docs-wrap').style.display  = mostrarDocs  ? 'block' : 'none';
+  document.getElementById('sep-subir').style.display  = (mostrarDocs && permiteSubir) ? 'block' : 'none';
+
   show('detalle');
+  if(mostrarDocs) cargarDocs(o);
+}
+function iconoDoc(a){
+  if(a.tipo==='op') return '📄';
+  if(a.tipo==='cert') return '🧾';
+  return a.pdf ? '📄' : '🖼️';
+}
+function cargarDocs(o){
+  var cont=document.getElementById('docs');
+  cont.innerHTML='<p class="muted" style="margin-top:0">Cargando documentos…</p>';
+  var tipo = o._ddjj ? 'ddjj' : o._ddjjp ? 'ddjjp' : 'orden';
+  var qs = 'tipo='+tipo+'&pago_id='+encodeURIComponent(o.pago_id||'');
+  if(tipo==='orden'){
+    qs += '&empresa='+encodeURIComponent(o.empresa||'')+
+          '&nro_op='+encodeURIComponent(o.nro_op||'')+
+          '&fecha='+encodeURIComponent(o.fecha||'');
+  }
+  fetchJSON(API+'/archivos?'+qs,{headers:{'x-pin':pin()}})
+   .then(no401).then(function(r){ return r.json(); })
+   .then(function(d){
+     if(d && d.error){ throw new Error(d.error); }
+     var docs=d.archivos||[];
+     if(!docs.length){ cont.innerHTML='<p class="muted" style="margin-top:0">No hay documentos guardados.</p>'; return; }
+     cont.innerHTML='';
+     docs.forEach(function(a){
+       var el=document.createElement('div'); el.className='doc';
+       el.innerHTML='<span class="ic">'+iconoDoc(a)+'</span><span class="nm">'+(a.nombre||'documento')+'</span><span class="go">→</span>';
+       el.onclick=function(){ abrirVisor(a.url, a.nombre, a.pdf); };
+       cont.appendChild(el);
+     });
+   })
+   .catch(function(e){
+     if(e==='pin') return;
+     var msg=(e && e.message)?e.message:'error';
+     cont.innerHTML='<p class="err" style="margin-top:0">No se pudieron cargar los documentos.'+
+       '<span class="muted" style="display:block;font-size:12px">'+msg+'</span>'+
+       '<button class="big" style="max-width:200px;margin:12px auto 0" onclick="cargarDocs(sel)">🔄 Reintentar</button></p>';
+   });
+}
+function abrirVisor(url, nombre, esPdf){
+  document.getElementById('v-nombre').textContent = nombre||'';
+  document.getElementById('v-abrir').href = url;
+  var c=document.getElementById('v-cont'); c.innerHTML='';
+  if(esPdf){
+    // iOS Safari a veces no embebe PDF en iframe; el link "Abrir en pestaña" es el respaldo.
+    var f=document.createElement('iframe'); f.src=url; c.appendChild(f);
+  } else {
+    var img=document.createElement('img'); img.src=url; c.appendChild(img);
+  }
+  document.getElementById('visor').style.display='flex';
+}
+function cerrarVisor(){
+  document.getElementById('visor').style.display='none';
+  document.getElementById('v-cont').innerHTML='';
 }
 // Procesar la foto elegida. iPhone (Safari) difiere de Android: manda HEIC, aplica
 // orientación EXIF y su canvas a veces devuelve vacío. Por eso se intenta
