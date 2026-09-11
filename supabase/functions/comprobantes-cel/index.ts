@@ -29,9 +29,62 @@ async function getPin(): Promise<string> {
   PIN_CACHE = (data?.valor ?? "").toString();
   return PIN_CACHE;
 }
-async function pinOk(req: Request): Promise<boolean> {
+
+// ── Bloqueo por intentos fallidos (tabla pin_intentos, una fila por IP) ──
+// El PIN es corto y la web es pública: sin esto se podía probar todo el
+// espacio de PINs con un script. 5 fallos en 15 min => 15 min bloqueado.
+// Un x-pin vacío no cuenta (es la app antes de que el usuario cargue el PIN).
+const MAX_FALLOS = 5;
+const VENTANA_MS = 15 * 60 * 1000;
+const BLOQUEO_MS = 15 * 60 * 1000;
+
+// IP real del cliente. Delante de la función está Cloudflare, que pone la IP
+// de conexión en cf-connecting-ip y REESCRIBE x-forwarded-for (un valor
+// falsificado por el cliente se descarta; verificado 11-sep-2026). El último
+// valor de x-forwarded-for es un proxy interno de Supabase, NO sirve.
+function ipDe(req: Request): string {
+  const cf = (req.headers.get("cf-connecting-ip") || "").trim();
+  if (cf) return cf;
+  const xf = (req.headers.get("x-forwarded-for") || "").split(",").map((s) => s.trim()).filter(Boolean);
+  return xf[0] || "desconocida";
+}
+
+// Devuelve null si el PIN es válido; si no, la Response de error a devolver.
+async function auth(req: Request): Promise<Response | null> {
+  const ip = ipDe(req);
+  const ahora = Date.now();
+  const { data: row } = await supabase.from("pin_intentos")
+    .select("fallidos, primer_fallo, bloqueado_hasta").eq("ip", ip).maybeSingle();
+
+  const hasta = row?.bloqueado_hasta ? new Date(row.bloqueado_hasta).getTime() : 0;
+  if (hasta > ahora) {
+    return json({ error: "bloqueado", espera: Math.ceil((hasta - ahora) / 1000) }, 429);
+  }
+
+  const enviado = req.headers.get("x-pin") || "";
   const pin = await getPin();
-  return pin !== "" && (req.headers.get("x-pin") || "") === pin;
+  if (pin !== "" && enviado === pin) {
+    if (row) await supabase.from("pin_intentos").delete().eq("ip", ip);
+    return null;
+  }
+  if (enviado === "") return json({ error: "pin" }, 401);
+
+  // Fallo: acumular dentro de la ventana; un bloqueo vencido arranca de cero.
+  let fallidos = 1;
+  let primer = new Date(ahora).toISOString();
+  if (row && !row.bloqueado_hasta && row.primer_fallo && (ahora - new Date(row.primer_fallo).getTime()) < VENTANA_MS) {
+    fallidos = Number(row.fallidos || 0) + 1;
+    primer = row.primer_fallo;
+  }
+  const bloqueado_hasta = fallidos >= MAX_FALLOS ? new Date(ahora + BLOQUEO_MS).toISOString() : null;
+  await supabase.from("pin_intentos").upsert({
+    ip, fallidos, primer_fallo: primer, bloqueado_hasta, actualizado: new Date(ahora).toISOString(),
+  });
+  // Limpieza oportunista de filas viejas (sin bloqueo vigente, más de 1 día).
+  await supabase.from("pin_intentos").delete().lt("actualizado", new Date(ahora - 24 * 3600 * 1000).toISOString());
+
+  if (bloqueado_hasta) return json({ error: "bloqueado", espera: Math.ceil(BLOQUEO_MS / 1000) }, 429);
+  return json({ error: "pin", restantes: MAX_FALLOS - fallidos }, 401);
 }
 
 // Bucket donde el escritorio guarda los comprobantes de DDJJ (el mismo de los
@@ -71,7 +124,7 @@ Deno.serve(async (req: Request) => {
   try {
     // ── Órdenes de pago a proveedores (flujo original) ────────────────────
     if (req.method === "GET" && path.endsWith("/ordenes")) {
-      if (!(await pinOk(req))) return json({ error: "pin" }, 401);
+      const deny = await auth(req); if (deny) return deny;
       const estado = (url.searchParams.get("estado") || "PENDIENTE").toUpperCase();
       if (estado !== "PENDIENTE" && estado !== "PAGADA") return json({ error: "estado" }, 400);
       const { data, error } = await supabase.rpc("ordenes_para_comprobantes", { p_estado: estado });
@@ -82,7 +135,7 @@ Deno.serve(async (req: Request) => {
     // ── DDJJ de retenciones pendientes de comprobante ─────────────────────
     // Las registró como pagadas el escritorio; falta subir la foto del pago.
     if (req.method === "GET" && path.endsWith("/ddjj")) {
-      if (!(await pinOk(req))) return json({ error: "pin" }, 401);
+      const deny = await auth(req); if (deny) return deny;
       const { data, error } = await supabase.rpc("ddjj_para_comprobantes");
       if (error) return json({ error: error.message }, 500);
       return json({ ddjj: data });
@@ -90,7 +143,7 @@ Deno.serve(async (req: Request) => {
 
     // ── Subir foto de una ORDEN (flujo original: bandeja_comprobantes) ─────
     if (req.method === "POST" && path.endsWith("/subir")) {
-      if (!(await pinOk(req))) return json({ error: "pin" }, 401);
+      const deny = await auth(req); if (deny) return deny;
       const body = await req.json();
       const pago_id = Number(body.pago_id);
       const data = String(body.data || "");
@@ -109,7 +162,7 @@ Deno.serve(async (req: Request) => {
     // las de agente de recaudación. Se listan todas con `pagada` (= ya tiene
     // comprobante), igual que /ddjj, para ver y no re-subir.
     if (req.method === "GET" && path.endsWith("/ddjj-propias")) {
-      if (!(await pinOk(req))) return json({ error: "pin" }, 401);
+      const deny = await auth(req); if (deny) return deny;
       const { data, error } = await supabase
         .from("ddjj_propias")
         .select("id, empresa, impuesto, periodo, monto, fecha_pago, comprobante_path")
@@ -128,7 +181,7 @@ Deno.serve(async (req: Request) => {
     // Sube al bucket de PDFs y setea ddjj_propias.comprobante_path (misma key
     // que lee "Pagos → DDJJ" del escritorio). Idempotente por comprobante NULL.
     if (req.method === "POST" && path.endsWith("/subir-ddjj-propias")) {
-      if (!(await pinOk(req))) return json({ error: "pin" }, 401);
+      const deny = await auth(req); if (deny) return deny;
       const body = await req.json();
       const pago_id = Number(body.pago_id);
       const data = String(body.data || "");
@@ -162,7 +215,7 @@ Deno.serve(async (req: Request) => {
     // (igual que adjuntar_comprobante_ddjj del escritorio, que lee esa key).
     // Así "Pagos DDJJ" muestra el comprobante sin ningún cambio en la app.
     if (req.method === "POST" && path.endsWith("/subir-ddjj")) {
-      if (!(await pinOk(req))) return json({ error: "pin" }, 401);
+      const deny = await auth(req); if (deny) return deny;
       const body = await req.json();
       const pago_id = Number(body.pago_id);
       const data = String(body.data || "");
@@ -195,7 +248,7 @@ Deno.serve(async (req: Request) => {
     // Órdenes → OP + certificados + comprobantes (escritorio y celular).
     // DDJJ    → el comprobante del pago (lo único que se sube).
     if (req.method === "GET" && path.endsWith("/archivos")) {
-      if (!(await pinOk(req))) return json({ error: "pin" }, 401);
+      const deny = await auth(req); if (deny) return deny;
       const tipo = (url.searchParams.get("tipo") || "").toLowerCase();
       // deno-lint-ignore no-explicit-any
       const archivos: Array<Record<string, any>> = [];

@@ -158,7 +158,9 @@ function volver(){ show('lista'); }
 function toast(t){ var e=document.getElementById('toast'); e.textContent=t; e.className='show'; setTimeout(function(){e.className='';},2200); }
 
 function mostrarPin(err){
-  document.getElementById('pin-err').style.display = err?'block':'none';
+  var pe=document.getElementById('pin-err');
+  pe.textContent = (typeof err==='string') ? err : 'PIN incorrecto';
+  pe.style.display = err?'block':'none';
   var s=document.getElementById('pin-screen'); s.style.display='flex';
   var i=document.getElementById('pin-input'); i.value=''; i.focus();
 }
@@ -171,6 +173,15 @@ function guardarPin(){
 }
 function no401(r){
   if(r.status===401){ localStorage.removeItem(PINKEY); mostrarPin(true); throw 'pin'; }
+  if(r.status===429){
+    // Bloqueo por intentos fallidos (lo aplica la Edge Function por IP).
+    localStorage.removeItem(PINKEY);
+    return r.json().catch(function(){ return {}; }).then(function(d){
+      var min=Math.max(1, Math.ceil((d.espera||900)/60));
+      mostrarPin('Demasiados intentos. Esperá '+min+' min y volvé a probar.');
+      throw 'pin';
+    });
+  }
   return r;
 }
 // fetch con timeout + reintentos: las redes de celular tienen micro-cortes y la
