@@ -39,8 +39,11 @@ async function pinOk(req: Request): Promise<boolean> {
 const DDJJ_BUCKET = "pdfs";
 
 // Nombre lindo para un certificado a partir del archivo (NRO-OP_CERT_XXX.pdf).
+function sufijoCert(fname: string, nro_op: string): string {
+  return fname.replace(nro_op + "_", "").replace(/\.pdf$/i, "");
+}
 function nombreCert(fname: string, nro_op: string): string {
-  const suf = fname.replace(nro_op + "_", "").replace(/\.pdf$/i, "");
+  const suf = sufijoCert(fname, nro_op);
   const map: Record<string, string> = {
     CERT_GANANCIAS: "Cert. Ganancias",
     CERT_IVA: "Cert. IVA",
@@ -48,6 +51,16 @@ function nombreCert(fname: string, nro_op: string): string {
     CERT_IIBB_ARBA: "Cert. IIBB ARBA",
   };
   return map[suf] || suf.replace(/_/g, " ");
+}
+// Clave de retención a la que pertenece el certificado (para enlazarlo en la ficha).
+function claveCert(fname: string, nro_op: string): string {
+  const map: Record<string, string> = {
+    CERT_GANANCIAS: "ganancias",
+    CERT_IVA: "iva",
+    CERT_IIBB_CABA: "iibb_caba",
+    CERT_IIBB_ARBA: "iibb_arba",
+  };
+  return map[sufijoCert(fname, nro_op)] || "";
 }
 
 Deno.serve(async (req: Request) => {
@@ -184,12 +197,17 @@ Deno.serve(async (req: Request) => {
     if (req.method === "GET" && path.endsWith("/archivos")) {
       if (!(await pinOk(req))) return json({ error: "pin" }, 401);
       const tipo = (url.searchParams.get("tipo") || "").toLowerCase();
-      const archivos: Array<{ nombre: string; tipo: string; pdf: boolean; url: string }> = [];
+      // deno-lint-ignore no-explicit-any
+      const archivos: Array<Record<string, any>> = [];
+      const firmados = new Set<string>();   // bucket/path ya firmados (evita duplicados)
 
-      async function firmar(bucket: string, p: string, nombre: string, clase: string) {
+      async function firmar(bucket: string, p: string, nombre: string, clase: string, extra: Record<string, unknown> = {}) {
+        const key = bucket + "/" + p;
+        if (firmados.has(key)) return;
         const { data, error } = await supabase.storage.from(bucket).createSignedUrl(p, 3600);
         if (error || !data?.signedUrl) return;
-        archivos.push({ nombre, tipo: clase, pdf: p.toLowerCase().endsWith(".pdf"), url: data.signedUrl });
+        firmados.add(key);
+        archivos.push({ nombre, tipo: clase, pdf: p.toLowerCase().endsWith(".pdf"), url: data.signedUrl, ...extra });
       }
 
       // ── DDJJ (recaudación o propias): solo el comprobante_path del pago ──
@@ -206,8 +224,11 @@ Deno.serve(async (req: Request) => {
         return json({ archivos });
       }
 
-      // ── Órdenes de pago: se arma por listado de Storage (sin depender de la
-      //    forma exacta de la RPC). Paths deterministas EMPRESA/AAAA-MM/... ──
+      // ── Órdenes de pago: FICHA (datos de la OP, facturas, retenciones, pagos)
+      //    + archivos firmados. La OP y los certificados viven en Storage con
+      //    paths deterministas EMPRESA/AAAA-MM/NRO-OP[_CERT_X].pdf; el comprobante
+      //    del pago que adjunta el escritorio está en op_pagos.comprobante_path y
+      //    las fotos del celular en el bucket 'comprobantes' por pago_id. ──
       if (tipo === "orden") {
         const empresa = (url.searchParams.get("empresa") || "").trim();
         const nro_op = (url.searchParams.get("nro_op") || "").trim();
@@ -215,37 +236,105 @@ Deno.serve(async (req: Request) => {
         const pago_id = Number(url.searchParams.get("pago_id"));
         if (!empresa || !nro_op) return json({ error: "faltan datos" }, 400);
 
+        // ── Ficha desde la base (pagos + facturas + op_pagos + ret_iibb) ──
+        // deno-lint-ignore no-explicit-any
+        let ficha: Record<string, any> | null = null;
+        // deno-lint-ignore no-explicit-any
+        let opsPagos: any[] = [];
+        if (pago_id) {
+          const { data: p } = await supabase.from("pagos")
+            .select("id, nro_op, fecha, empresa, proveedor, cuit, tipo, categoria, estado, mes_retencion, " +
+                    "total_factura, total_subtotal, total_iva, total_a_pagar, " +
+                    "ret_ganancias, ret_iibb_caba, ret_iibb_arba, ret_iva, " +
+                    "cert_ganancias, cert_caba, cert_arba, cert_iva")
+            .eq("id", pago_id).maybeSingle();
+          if (p) {
+            const [fcs, ops, iibb] = await Promise.all([
+              supabase.from("facturas")
+                .select("id, pto_venta, nro_fc, fecha, subtotal, iva, perc_iibb, perc_iva, no_gravado, otros_conceptos, total, orden")
+                .eq("pago_id", pago_id).order("orden", { ascending: true }).order("id", { ascending: true }),
+              supabase.from("op_pagos")
+                .select("id, fecha, importe, medio, banco, referencia, estado, comprobante_path, comprobante_nombre")
+                .eq("pago_id", pago_id).eq("estado", "ACTIVO").order("fecha", { ascending: true }).order("id", { ascending: true }),
+              supabase.from("ret_iibb").select("jurisdiccion, alicuota").eq("nro_op", p.nro_op).eq("estado", "ACTIVA"),
+            ]);
+            opsPagos = ops.data ?? [];
+            const alic: Record<string, number | null> = {};
+            for (const r of iibb.data ?? []) alic[String(r.jurisdiccion || "").toUpperCase()] = r.alicuota;
+
+            // deno-lint-ignore no-explicit-any
+            const retenciones: any[] = [];
+            const addRet = (key: string, nombre: string, monto: unknown, cert: unknown, alicuota: number | null) => {
+              if (Number(monto) > 0) retenciones.push({ key, nombre, monto: Number(monto), nro_certificado: cert ?? null, alicuota });
+            };
+            addRet("ganancias", "Ret. Ganancias", p.ret_ganancias, p.cert_ganancias, null);
+            addRet("iibb_caba", "Ret. IIBB CABA", p.ret_iibb_caba, p.cert_caba, alic["CABA"] ?? null);
+            addRet("iibb_arba", "Ret. IIBB ARBA", p.ret_iibb_arba, p.cert_arba, alic["ARBA"] ?? null);
+            addRet("iva", "Ret. IVA", p.ret_iva, p.cert_iva, null);
+
+            ficha = {
+              pago_id: p.id, nro_op: p.nro_op, fecha: p.fecha, empresa: p.empresa, proveedor: p.proveedor,
+              cuit: p.cuit, tipo: p.tipo, categoria: p.categoria, estado: p.estado, mes_retencion: p.mes_retencion,
+              total_factura: Number(p.total_factura ?? 0), total_subtotal: Number(p.total_subtotal ?? 0),
+              total_iva: Number(p.total_iva ?? 0), total_a_pagar: Number(p.total_a_pagar ?? 0),
+              total_retenciones: retenciones.reduce((a, r) => a + r.monto, 0),
+              facturas: (fcs.data ?? []).map((f) => ({
+                id: f.id, pto_venta: f.pto_venta, nro_fc: f.nro_fc, fecha: f.fecha,
+                subtotal: Number(f.subtotal ?? 0), iva: Number(f.iva ?? 0), total: Number(f.total ?? 0),
+              })),
+              retenciones,
+              pagos: opsPagos.map((o) => ({
+                id: o.id, fecha: o.fecha, importe: Number(o.importe ?? 0), medio: o.medio, banco: o.banco,
+                referencia: o.referencia, comprobante: !!o.comprobante_path, comprobante_nombre: o.comprobante_nombre,
+              })),
+            };
+          }
+        }
+
+        // ── OP + certificados en Storage (por mes de la fecha; si no, todos) ──
         const meses = new Set<string>();
         const m1 = fecha.match(/(\d{4})-(\d{2})/);            // YYYY-MM-DD
         if (m1) meses.add(`${m1[1]}-${m1[2]}`);
         const m2 = fecha.match(/(\d{2})\/(\d{2})\/(\d{4})/);  // DD/MM/YYYY
         if (m2) meses.add(`${m2[3]}-${m2[2]}`);
+        if (ficha?.fecha) { const m3 = String(ficha.fecha).match(/(\d{4})-(\d{2})/); if (m3) meses.add(`${m3[1]}-${m3[2]}`); }
 
+        let hallados = 0;   // OP/certificados encontrados en Storage
         async function scanMes(mes: string) {
           const base = `${empresa}/${mes}`;
-          const { data: files } = await supabase.storage.from("pdfs").list(base, { limit: 200 });
+          // search = filtro "contiene" del lado del servidor: evita el tope de
+          // listado en carpetas con cientos de PDFs.
+          const { data: files } = await supabase.storage.from("pdfs").list(base, { limit: 1000, search: nro_op });
           for (const f of files || []) {
             const nm = f.name || "";
             if (!nm.toLowerCase().endsWith(".pdf")) continue;
             if (nm === `${nro_op}.pdf`) {
+              hallados++;
               await firmar("pdfs", `${base}/${nm}`, "Orden de pago", "op");
             } else if (nm.startsWith(`${nro_op}_CERT_`)) {
-              await firmar("pdfs", `${base}/${nm}`, nombreCert(nm, nro_op), "cert");
+              hallados++;
+              await firmar("pdfs", `${base}/${nm}`, nombreCert(nm, nro_op), "cert", { ret: claveCert(nm, nro_op) });
             }
           }
-          const { data: comps } = await supabase.storage.from("pdfs").list(`${base}/comprobantes`, { limit: 200 });
-          let n = 0;
+          // Comprobantes viejos del escritorio (antes de op_pagos.comprobante_path).
+          const { data: comps } = await supabase.storage.from("pdfs").list(`${base}/comprobantes`, { limit: 1000, search: nro_op + "_p" });
           for (const c of comps || []) {
             if (c.name && c.name.startsWith(`${nro_op}_p`)) {
-              n++;
-              await firmar("pdfs", `${base}/comprobantes/${c.name}`, "Comprobante de pago" + (n > 1 ? ` ${n}` : ""), "comprobante");
+              await firmar("pdfs", `${base}/comprobantes/${c.name}`, "Comprobante de pago", "comprobante");
             }
+          }
+        }
+
+        // Comprobantes del escritorio: primero por la base (path exacto + nombre original).
+        for (const o of opsPagos) {
+          if (o.comprobante_path) {
+            await firmar("pdfs", String(o.comprobante_path), String(o.comprobante_nombre || "Comprobante de pago"), "comprobante", { op_pago_id: o.id });
           }
         }
 
         for (const mes of meses) await scanMes(mes);
         // Si la fecha no ayudó (formato raro / OP vieja), recorrer los meses de la empresa.
-        if (!archivos.length) {
+        if (!hallados) {
           const { data: subs } = await supabase.storage.from("pdfs").list(empresa, { limit: 200 });
           for (const s of subs || []) {
             if (s.name && /^\d{4}-\d{2}$/.test(s.name) && !meses.has(s.name)) await scanMes(s.name);
@@ -259,13 +348,13 @@ Deno.serve(async (req: Request) => {
           for (const c of cel || []) {
             if (!c.name) continue;
             n++;
-            await firmar("comprobantes", `${pago_id}/${c.name}`, "Comprobante (celular)" + (n > 1 ? ` ${n}` : ""), "comprobante");
+            await firmar("comprobantes", `${pago_id}/${c.name}`, "Comprobante (celular)" + (n > 1 ? ` ${n}` : ""), "comprobante", { celular: true });
           }
         }
 
         const prio: Record<string, number> = { op: 0, cert: 1, comprobante: 2 };
         archivos.sort((a, b) => (prio[a.tipo] ?? 9) - (prio[b.tipo] ?? 9));
-        return json({ archivos });
+        return json({ archivos, ficha });
       }
 
       return json({ error: "tipo inválido" }, 400);
@@ -273,7 +362,7 @@ Deno.serve(async (req: Request) => {
 
     return json({
       ok: true,
-      info: "API comprobantes-cel: GET /ordenes?estado=PENDIENTE|PAGADA, GET /ddjj, GET /ddjj-propias, GET /archivos?tipo=orden|ddjj|ddjjp, POST /subir, POST /subir-ddjj, POST /subir-ddjj-propias (header x-pin)",
+      info: "API comprobantes-cel: GET /ordenes?estado=PENDIENTE|PAGADA, GET /ddjj, GET /ddjj-propias, GET /archivos?tipo=orden|ddjj|ddjjp (orden: + ficha), POST /subir, POST /subir-ddjj, POST /subir-ddjj-propias (header x-pin)",
     });
   } catch (e) {
     return json({ error: String(e) }, 500);

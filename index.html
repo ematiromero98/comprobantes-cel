@@ -55,9 +55,28 @@ button.big:disabled{background:#475569;color:#94a3b8}
 #visor .top{background:#1e293b;padding:10px 12px;display:flex;align-items:center;gap:10px}
 #visor .top .nm{flex:1;font-size:14px;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #visor .top a{color:#38bdf8;font-size:13px;text-decoration:none;white-space:nowrap}
-#visor .cont{flex:1;overflow:auto;display:flex;align-items:flex-start;justify-content:center}
-#visor img{max-width:100%;height:auto;display:block}
+#visor .top .st{color:#94a3b8;font-size:12px;white-space:nowrap}
+#visor .top .zb{background:#334155;border:none;color:#e2e8f0;font-size:20px;line-height:1;width:34px;height:34px;border-radius:8px}
+#visor .cont{flex:1;overflow:auto;display:block;-webkit-overflow-scrolling:touch}
+#visor img{max-width:100%;height:auto;display:block;margin:0 auto}
 #visor iframe{width:100%;height:100%;border:none;background:#fff}
+/* Páginas del PDF dibujadas con PDF.js (canvas por página). Con zoom > 100 % el
+   contenedor scrollea en horizontal. */
+#visor .pages{display:flex;flex-direction:column;gap:8px;padding:6px;align-items:flex-start;width:max-content;min-width:100%}
+#visor .pages canvas{display:block;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.5)}
+/* Ficha de la orden: secciones (orden / facturas / retenciones / pagos). */
+.sec{margin-bottom:18px}
+.ficha{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px;margin-bottom:8px}
+.kv{display:flex;justify-content:space-between;gap:10px;font-size:14px;padding:3px 0}
+.kv span:first-child{color:#94a3b8;white-space:nowrap}
+.kv span:last-child{text-align:right;word-break:break-word}
+.tot{display:flex;justify-content:space-between;font-size:14px;padding:5px 0 2px;border-top:1px solid #334155;margin-top:4px}
+.tot.big{font-size:17px;color:#38bdf8}
+.item{background:#1e293b;border:1px solid #334155;border-radius:10px;margin-bottom:8px;overflow:hidden}
+.item .fila{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;font-size:14px;line-height:1.25}
+.item .fila .imp{font-weight:bold;white-space:nowrap}
+.item .doc{border:none;border-top:1px solid #334155;border-radius:0;margin:0;background:#1a2537}
+.nada{color:#64748b;font-size:13px;margin:0 0 8px;padding:0 2px}
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#334155;color:#fff;padding:12px 18px;border-radius:24px;font-size:15px;opacity:0;transition:.25s;z-index:20}
 #toast.show{opacity:1}
 #pin-screen{display:none;position:fixed;inset:0;background:#0f172a;z-index:30;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center}
@@ -99,7 +118,6 @@ button.big:disabled{background:#475569;color:#94a3b8}
   <div class="top"><button class="back" onclick="volver()">←</button><span id="t-orden"></span></div>
   <div class="body">
     <div id="docs-wrap" style="display:none">
-      <div class="doc-h">Documentos</div>
       <div id="docs"><p class="muted" style="margin-top:0">Cargando documentos…</p></div>
     </div>
     <div id="subir-wrap">
@@ -116,7 +134,12 @@ button.big:disabled{background:#475569;color:#94a3b8}
   <div class="top">
     <button class="back" onclick="cerrarVisor()">←</button>
     <span class="nm" id="v-nombre"></span>
-    <a id="v-abrir" href="#" target="_blank" rel="noopener">Abrir en pestaña ↗</a>
+    <span class="st" id="v-st"></span>
+    <span id="v-zoom" style="display:none;gap:6px">
+      <button class="zb" onclick="zoomPdf(-0.25)" aria-label="Alejar">−</button>
+      <button class="zb" onclick="zoomPdf(0.25)" aria-label="Acercar">+</button>
+    </span>
+    <a id="v-abrir" href="#" target="_blank" rel="noopener">Abrir ↗</a>
   </div>
   <div class="cont" id="v-cont"></div>
 </div>
@@ -332,14 +355,10 @@ function cargarDocs(o){
    .then(function(d){
      if(d && d.error){ throw new Error(d.error); }
      var docs=d.archivos||[];
-     if(!docs.length){ cont.innerHTML='<p class="muted" style="margin-top:0">No hay documentos guardados.</p>'; return; }
-     cont.innerHTML='';
-     docs.forEach(function(a){
-       var el=document.createElement('div'); el.className='doc';
-       el.innerHTML='<span class="ic">'+iconoDoc(a)+'</span><span class="nm">'+(a.nombre||'documento')+'</span><span class="go">→</span>';
-       el.onclick=function(){ abrirVisor(a.url, a.nombre, a.pdf); };
-       cont.appendChild(el);
-     });
+     if(tipo==='orden'){ renderFicha(cont, d.ficha||null, docs); return; }
+     cont.innerHTML='<div class="doc-h">Documentos</div>';
+     if(!docs.length){ cont.appendChild(el('<p class="muted" style="margin-top:0">No hay documentos guardados.</p>')); return; }
+     docs.forEach(function(a){ cont.appendChild(docRow(a)); });
    })
    .catch(function(e){
      if(e==='pin') return;
@@ -349,19 +368,153 @@ function cargarDocs(o){
        '<button class="big" style="max-width:200px;margin:12px auto 0" onclick="cargarDocs(sel)">🔄 Reintentar</button></p>';
    });
 }
+function esc(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function el(html){ var d=document.createElement('div'); d.innerHTML=html.trim(); return d.firstChild; }
+function docRow(a, rotulo){
+  var e=el('<div class="doc"><span class="ic">'+iconoDoc(a)+'</span><span class="nm">'+esc(rotulo||a.nombre||'documento')+'</span><span class="go">→</span></div>');
+  e.onclick=function(){ abrirVisor(a.url, a.nombre, a.pdf); };
+  return e;
+}
+function fechaTxt(f){ if(!f) return ''; var m=String(f).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? (m[3]+'/'+m[2]+'/'+m[1]) : String(f); }
+function pctTxt(a){ return (a==null||a==='') ? '' : (' · '+(Number(a)*100).toLocaleString('es-AR',{maximumFractionDigits:2})+'%'); }
+// Ficha completa de una orden: datos + OP, facturas, retenciones (con su
+// certificado) y pagos (con el comprobante del escritorio y las fotos del celu).
+function renderFicha(cont, f, docs){
+  cont.innerHTML='';
+  function porTipo(t){ return docs.filter(function(a){ return a.tipo===t; }); }
+  function seccion(titulo){ var s=el('<div class="sec"><div class="doc-h">'+titulo+'</div></div>'); cont.appendChild(s); return s; }
+
+  // 1) Orden de pago
+  var s1=seccion('Orden de pago');
+  if(f){
+    s1.appendChild(el('<div class="ficha">'+
+      '<div class="kv"><span>Proveedor</span><span><b>'+esc(f.proveedor)+'</b></span></div>'+
+      (f.cuit?('<div class="kv"><span>CUIT</span><span>'+esc(f.cuit)+'</span></div>'):'')+
+      '<div class="kv"><span>Fecha</span><span>'+esc(fechaTxt(f.fecha))+'</span></div>'+
+      '<div class="kv"><span>Empresa</span><span>'+esc(f.empresa)+(f.categoria?(' · '+esc(f.categoria)):'')+'</span></div>'+
+      '<div class="tot"><span>Total facturas</span><b>'+money(f.total_factura)+'</b></div>'+
+      '<div class="tot"><span>Retenciones</span><b>− '+money(f.total_retenciones)+'</b></div>'+
+      '<div class="tot big"><span>Neto a pagar</span><b>'+money(f.total_a_pagar)+'</b></div>'+
+      '</div>'));
+  }
+  var ops=porTipo('op');
+  ops.forEach(function(a){ s1.appendChild(docRow(a)); });
+  if(!ops.length) s1.appendChild(el('<p class="nada">El PDF de la orden todavía no está generado.</p>'));
+
+  // 2) Facturas
+  if(f){
+    var s2=seccion('Facturas');
+    if(!f.facturas.length) s2.appendChild(el('<p class="nada">Sin facturas cargadas.</p>'));
+    f.facturas.forEach(function(x){
+      s2.appendChild(el('<div class="item"><div class="fila"><div><b>FC '+esc(x.pto_venta)+'-'+esc(x.nro_fc)+'</b>'+
+        '<div class="meta">'+esc(fechaTxt(x.fecha))+(x.iva?(' · IVA '+money(x.iva)):'')+'</div></div>'+
+        '<div class="imp">'+money(x.total)+'</div></div></div>'));
+    });
+  }
+
+  // 3) Retenciones (cada una con su certificado si está el PDF)
+  if(f){
+    var s3=seccion('Retenciones');
+    var certs=porTipo('cert');
+    if(!f.retenciones.length) s3.appendChild(el('<p class="nada">Esta orden no lleva retenciones.</p>'));
+    f.retenciones.forEach(function(r){
+      var it=el('<div class="item"><div class="fila"><div><b>'+esc(r.nombre)+'</b>'+
+        '<div class="meta">'+(r.nro_certificado?('Certificado N° '+esc(r.nro_certificado)):'Sin N° de certificado')+esc(pctTxt(r.alicuota))+'</div></div>'+
+        '<div class="imp">'+money(r.monto)+'</div></div></div>');
+      var c=null; for(var i=0;i<certs.length;i++){ if(certs[i].ret===r.key){ c=certs[i]; break; } }
+      if(c){ c._usado=true; it.appendChild(docRow(c, 'Ver certificado')); }
+      else it.appendChild(el('<p class="nada" style="padding:6px 12px 10px;margin:0">Certificado sin PDF guardado.</p>'));
+      s3.appendChild(it);
+    });
+    certs.forEach(function(c){ if(!c._usado) s3.appendChild(docRow(c)); });
+  }
+
+  // 4) Pagos (cada uno con su comprobante) + fotos del celular
+  var s4=seccion('Pagos');
+  var comps=porTipo('comprobante');
+  if(f){
+    if(!f.pagos.length) s4.appendChild(el('<p class="nada">Todavía no hay pagos registrados.</p>'));
+    f.pagos.forEach(function(p){
+      var det=[esc(fechaTxt(p.fecha)), esc(p.medio||''), esc(p.banco||''), p.referencia?('Ref. '+esc(p.referencia)):''].filter(Boolean).join(' · ');
+      var it=el('<div class="item"><div class="fila"><div><b>Pago</b><div class="meta">'+det+'</div></div><div class="imp">'+money(p.importe)+'</div></div></div>');
+      comps.forEach(function(c){ if(c.op_pago_id===p.id){ c._usado=true; it.appendChild(docRow(c)); } });
+      s4.appendChild(it);
+    });
+  }
+  var otros=comps.filter(function(c){ return !c.celular && !c._usado; });
+  var cel=comps.filter(function(c){ return c.celular && !c._usado; });
+  otros.forEach(function(c){ s4.appendChild(docRow(c)); });
+  if(cel.length){
+    s4.appendChild(el('<div class="doc-h" style="margin-top:10px">Fotos subidas desde el celular</div>'));
+    cel.forEach(function(c){ s4.appendChild(docRow(c)); });
+  }
+  if(!f && !docs.length) cont.innerHTML='<p class="muted" style="margin-top:0">No hay documentos guardados.</p>';
+}
+
+// ── Visor: imágenes directo; PDF dibujado con PDF.js (canvas por página). ──
+// Chrome Android y Safari iOS NO embeben un PDF en iframe: lo descargan o se
+// van a otra app, y el usuario "sale" de la web. Con PDF.js se queda adentro.
+// Si la librería no carga (sin CDN), se cae al iframe + "Abrir ↗".
+var PDFJS='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+var pdfLibP=null, visorPdf=null, visorZoom=1, visorGen=0;
+function pdfLib(){
+  if(window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if(pdfLibP) return pdfLibP;
+  pdfLibP=new Promise(function(res,rej){
+    var sc=document.createElement('script'); sc.src=PDFJS+'pdf.min.js';
+    sc.onload=function(){ window.pdfjsLib.GlobalWorkerOptions.workerSrc=PDFJS+'pdf.worker.min.js'; res(window.pdfjsLib); };
+    sc.onerror=function(){ pdfLibP=null; rej(new Error('pdfjs')); };
+    document.head.appendChild(sc);
+  });
+  return pdfLibP;
+}
 function abrirVisor(url, nombre, esPdf){
   document.getElementById('v-nombre').textContent = nombre||'';
   document.getElementById('v-abrir').href = url;
-  var c=document.getElementById('v-cont'); c.innerHTML='';
-  if(esPdf){
-    // iOS Safari a veces no embebe PDF en iframe; el link "Abrir en pestaña" es el respaldo.
-    var f=document.createElement('iframe'); f.src=url; c.appendChild(f);
-  } else {
-    var img=document.createElement('img'); img.src=url; c.appendChild(img);
-  }
+  document.getElementById('v-st').textContent='';
+  document.getElementById('v-zoom').style.display = esPdf ? 'flex' : 'none';
+  var c=document.getElementById('v-cont'); c.innerHTML=''; c.scrollTop=0; c.scrollLeft=0;
   document.getElementById('visor').style.display='flex';
+  var gen=++visorGen; visorPdf=null; visorZoom=1;
+  if(!esPdf){ var img=document.createElement('img'); img.src=url; c.appendChild(img); return; }
+  c.innerHTML='<p class="muted">Cargando PDF…</p>';
+  pdfLib().then(function(lib){ return lib.getDocument({url:url}).promise; })
+   .then(function(pdf){ if(gen!==visorGen) return; visorPdf=pdf; dibujarPdf(gen); })
+   .catch(function(){
+     if(gen!==visorGen) return;
+     c.innerHTML=''; var f=document.createElement('iframe'); f.src=url; c.appendChild(f);
+     document.getElementById('v-st').textContent='Si no se ve, usá "Abrir ↗"';
+   });
+}
+function dibujarPdf(gen){
+  var pdf=visorPdf, c=document.getElementById('v-cont'); if(!pdf) return;
+  c.innerHTML=''; var wrap=document.createElement('div'); wrap.className='pages'; c.appendChild(wrap);
+  var W=Math.max(200, c.clientWidth-12), dpr=Math.min(window.devicePixelRatio||1, 2), st=document.getElementById('v-st');
+  var i=1;
+  function next(){
+    if(gen!==visorGen) return;
+    if(i>pdf.numPages){ st.textContent=pdf.numPages+' pág.'+(visorZoom!==1?(' · '+Math.round(visorZoom*100)+'%'):''); return; }
+    st.textContent='Pág. '+i+'/'+pdf.numPages;
+    pdf.getPage(i).then(function(page){
+      var v0=page.getViewport({scale:1});
+      var vp=page.getViewport({scale:(W/v0.width)*visorZoom});
+      var cv=document.createElement('canvas');
+      cv.width=Math.floor(vp.width*dpr); cv.height=Math.floor(vp.height*dpr);
+      cv.style.width=Math.floor(vp.width)+'px'; cv.style.height=Math.floor(vp.height)+'px';
+      wrap.appendChild(cv);
+      return page.render({canvasContext:cv.getContext('2d'), viewport:vp, transform:(dpr!==1)?[dpr,0,0,dpr,0,0]:null}).promise;
+    }).then(function(){ i++; next(); }).catch(function(){ i++; next(); });
+  }
+  next();
+}
+function zoomPdf(d){
+  if(!visorPdf) return;
+  visorZoom=Math.max(0.5, Math.min(3, Math.round((visorZoom+d)*100)/100));
+  dibujarPdf(++visorGen);
 }
 function cerrarVisor(){
+  ++visorGen;
+  if(visorPdf){ try{ visorPdf.destroy(); }catch(e){} visorPdf=null; }
   document.getElementById('visor').style.display='none';
   document.getElementById('v-cont').innerHTML='';
 }
