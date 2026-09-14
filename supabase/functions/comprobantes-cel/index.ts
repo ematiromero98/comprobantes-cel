@@ -157,6 +157,24 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true });
     }
 
+    // ── Subir foto de una FACTURA para leer con IA (bandeja_facturas_ia) ───
+    // El celular solo sube la foto; la IA la analiza después EN LA PC
+    // (RetencionesPro), donde vive la API key. Acá NO se llama a ningún modelo.
+    if (req.method === "POST" && path.endsWith("/subir-factura-ia")) {
+      const deny = await auth(req); if (deny) return deny;
+      const body = await req.json();
+      const data = String(body.data || "");
+      if (!data) return json({ error: "faltan datos" }, 400);
+      const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+      const archivo = "facturas-ia/" + crypto.randomUUID() + ".jpg";
+      const up = await supabase.storage.from("comprobantes").upload(
+        archivo, bytes, { contentType: "image/jpeg" });
+      if (up.error) return json({ error: up.error.message }, 500);
+      const ins = await supabase.from("bandeja_facturas_ia").insert({ archivo });
+      if (ins.error) return json({ error: ins.error.message }, 500);
+      return json({ ok: true });
+    }
+
     // ── DDJJ PROPIAS (Anticipos / CM03 / IVA): pagadas + pendientes ───────
     // Son las DDJJ que el estudio paga por sí mismo (tabla ddjj_propias), no
     // las de agente de recaudación. Se listan todas con `pagada` (= ya tiene
@@ -415,7 +433,7 @@ Deno.serve(async (req: Request) => {
 
     return json({
       ok: true,
-      info: "API comprobantes-cel: GET /ordenes?estado=PENDIENTE|PAGADA, GET /ddjj, GET /ddjj-propias, GET /archivos?tipo=orden|ddjj|ddjjp (orden: + ficha), POST /subir, POST /subir-ddjj, POST /subir-ddjj-propias (header x-pin)",
+      info: "API comprobantes-cel: GET /ordenes?estado=PENDIENTE|PAGADA, GET /ddjj, GET /ddjj-propias, GET /archivos?tipo=orden|ddjj|ddjjp (orden: + ficha), POST /subir, POST /subir-factura-ia, POST /subir-ddjj, POST /subir-ddjj-propias (header x-pin)",
     });
   } catch (e) {
     return json({ error: String(e) }, 500);
