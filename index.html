@@ -599,11 +599,11 @@ function _subirCrudo(f){                       // último recurso: el archivo si
 }
 function _redim(src, w0, h0, f){
   try{
-    var max=1600, w=w0, h=h0;
+    var max=1400, w=w0, h=h0;
     if(w>h && w>max){ h=Math.round(h*max/w); w=max; } else if(h>=w && h>max){ w=Math.round(w*max/h); h=max; }
     var c=document.createElement('canvas'); c.width=w; c.height=h;
     c.getContext('2d').drawImage(src,0,0,w,h);
-    var url=c.toDataURL('image/jpeg',0.7);
+    var url=c.toDataURL('image/jpeg',0.62);
     if(!url || url.length<200){ _subirCrudo(f); return; }   // iOS: canvas vino vacío
     _prevListo(url);
   }catch(e){ _subirCrudo(f); }

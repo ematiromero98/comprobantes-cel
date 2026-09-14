@@ -22,6 +22,17 @@ function json(body: unknown, status = 200) {
   });
 }
 
+// Decodifica base64 → bytes escribiendo directo en el Uint8Array. NO usar
+// Uint8Array.from(atob(data), fn): con un iterable string, from() bufferea todo
+// en un array temporal enorme y hacía OOM la función (status 546) al subir una
+// foto grande. Este camino usa memoria O(n) y no crashea.
+function bytesDeBase64(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
 let PIN_CACHE: string | null = null;
 async function getPin(): Promise<string> {
   if (PIN_CACHE !== null) return PIN_CACHE;
@@ -148,7 +159,7 @@ Deno.serve(async (req: Request) => {
       const pago_id = Number(body.pago_id);
       const data = String(body.data || "");
       if (!pago_id || !data) return json({ error: "faltan datos" }, 400);
-      const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+      const bytes = bytesDeBase64(data);
       const archivo = pago_id + "/" + crypto.randomUUID() + ".jpg";
       const up = await supabase.storage.from("comprobantes").upload(archivo, bytes, { contentType: "image/jpeg" });
       if (up.error) return json({ error: up.error.message }, 500);
@@ -165,7 +176,12 @@ Deno.serve(async (req: Request) => {
       const body = await req.json();
       const data = String(body.data || "");
       if (!data) return json({ error: "faltan datos" }, 400);
-      const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+      // Guarda de memoria: una foto sin comprimir (varios MB) hacía OOM la
+      // función (status 546). Se corta con un error claro. ~8M de base64 ≈ 6 MB.
+      if (data.length > 8_000_000) {
+        return json({ error: "La foto es muy pesada. Sacala de nuevo con menos zoom/resolución o volvé a intentar." }, 413);
+      }
+      const bytes = bytesDeBase64(data);
       const archivo = "facturas-ia/" + crypto.randomUUID() + ".jpg";
       const up = await supabase.storage.from("comprobantes").upload(
         archivo, bytes, { contentType: "image/jpeg" });
@@ -217,7 +233,7 @@ Deno.serve(async (req: Request) => {
       const lote = "DDJJP-" + row.impuesto + "-" + row.periodo;
       const archivo = row.empresa + "/" + anioMes + "/comprobantes/" + lote + "_p" + pago_id + ".jpg";
 
-      const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+      const bytes = bytesDeBase64(data);
       const up = await supabase.storage.from(DDJJ_BUCKET).upload(archivo, bytes, { contentType: "image/jpeg", upsert: true });
       if (up.error) return json({ error: up.error.message }, 500);
 
@@ -251,7 +267,7 @@ Deno.serve(async (req: Request) => {
       const lote = "DDJJ-" + row.regimen + "-" + row.periodo + "-" + row.quincena;
       const archivo = row.empresa + "/" + anioMes + "/comprobantes/" + lote + "_p" + pago_id + ".jpg";
 
-      const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+      const bytes = bytesDeBase64(data);
       const up = await supabase.storage.from(DDJJ_BUCKET).upload(archivo, bytes, { contentType: "image/jpeg", upsert: true });
       if (up.error) return json({ error: up.error.message }, 500);
 
