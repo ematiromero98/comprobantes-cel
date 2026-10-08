@@ -9,7 +9,8 @@
 body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0}
 header{position:sticky;top:0;background:#1e293b;padding:10px 14px;box-shadow:0 2px 8px rgba(0,0,0,.4);z-index:5}
 h1{margin:0 0 8px;font-size:16px}
-.tabs{display:flex;gap:8px;margin-bottom:8px}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.tabs .tab{flex:1 1 30%;min-width:0}
 .tab{flex:1;padding:8px 3px;border:1px solid #334155;background:#0f172a;color:#94a3b8;border-radius:8px;font-size:12.5px;font-weight:bold;line-height:1.15}
 .tab.active{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
 .chips{display:flex;gap:6px;margin-top:8px}
@@ -81,6 +82,16 @@ button.big:disabled{background:#475569;color:#94a3b8}
 #toast.show{opacity:1}
 #pin-screen{display:none;position:fixed;inset:0;background:#0f172a;z-index:30;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center}
 #pin-input{width:100%;max-width:260px;padding:12px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;font-size:20px;text-align:center;letter-spacing:2px}
+#cob-lista .ca{display:flex;align-items:center;gap:10px;background:#1e293b;border:1px solid #334155;border-radius:8px;padding:6px;margin-bottom:6px}
+#cob-lista .ca img{width:54px;height:54px;object-fit:cover;border-radius:6px}
+#cob-lista .ca .pdf{width:54px;height:54px;display:flex;align-items:center;justify-content:center;font-size:26px;background:#0f172a;border-radius:6px}
+#cob-lista .ca .nm{flex:1;font-size:13px;word-break:break-all}
+#cob-lista .ca button{background:none;border:none;color:#f87171;font-size:20px}
+.cobsel{width:100%;margin-bottom:10px;padding:10px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:8px;font-size:15px}
+#cob-nota{width:100%;margin:8px 0;box-sizing:border-box;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:8px;padding:8px;font-size:14px;font-family:inherit}
+.cu{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:13px}
+.cu .es{float:right;font-weight:bold}
+#file-cob,#file-cob-cam{display:none}
 </style>
 </head>
 <body>
@@ -101,6 +112,7 @@ button.big:disabled{background:#475569;color:#94a3b8}
     <button id="tab-ddjj" class="tab" onclick="setTab('DDJJ')">Agente Recaud.</button>
     <button id="tab-ddjjp" class="tab" onclick="setTab('DDJJP')">DDJJ</button>
     <button id="tab-fia" class="tab" onclick="setTab('FIA')">📷 Factura IA</button>
+    <button id="tab-cob" class="tab" onclick="setTab('COB')">💵 Cobranza</button>
   </div>
   <div class="filtros">
     <select id="empresa" onchange="render()"><option value="">Todas</option></select>
@@ -121,6 +133,24 @@ button.big:disabled{background:#475569;color:#94a3b8}
   <input id="file-fia" type="file" accept="image/*" capture="environment">
   <img id="preview-fia" style="display:none;max-width:100%;border-radius:8px;margin:10px 0">
   <button class="big" id="btnfia" disabled onclick="subirFacturaIA()">Subir factura</button>
+</div>
+
+<div class="wrap" id="cob-screen" style="display:none">
+  <p class="muted" style="margin-top:0">Sacá foto(s) de la cobranza: orden de pago del cliente, aviso de transferencia y certificados de retención (o subí el PDF). Queda en <b>Cobranzas OSECAC → Cobranzas del celular</b> para procesarla con IA o a mano.</p>
+  <select id="cob-empresa" class="cobsel">
+    <option value="">Empresa que cobró (si la sabés)</option>
+    <option>APERSEG</option><option>LIMART</option><option>PAKLAY S.A</option><option>WONDER NEW</option>
+    <option>AQUA GROUP SRL</option><option>S5</option><option>GTRACING</option><option>SEAL</option><option>SAFE KING</option>
+  </select>
+  <label class="cam" for="file-cob-cam" style="padding:22px 12px">📷  Sacar foto</label>
+  <input id="file-cob-cam" type="file" accept="image/*" capture="environment">
+  <label class="cam" for="file-cob" style="padding:14px 12px;font-size:14px">🖼️ Galería o PDF (podés elegir varios)</label>
+  <input id="file-cob" type="file" accept="image/*,application/pdf" multiple>
+  <div id="cob-lista"></div>
+  <textarea id="cob-nota" rows="2" placeholder="Nota (opcional): cliente, qué facturas paga, etc."></textarea>
+  <button class="big" id="btncob" disabled onclick="subirCobranza()">Subir cobranza</button>
+  <div class="doc-h" style="margin-top:22px">Últimas subidas</div>
+  <div id="cob-ult"><p class="muted">—</p></div>
 </div>
 
 <div id="detalle">
@@ -228,12 +258,14 @@ function setTab(t){
   document.getElementById('tab-ddjj').className='tab'+(t==='DDJJ'?' active':'');
   document.getElementById('tab-ddjjp').className='tab'+(t==='DDJJP'?' active':'');
   document.getElementById('tab-fia').className='tab'+(t==='FIA'?' active':'');
-  // Pestaña "Factura IA": pantalla de captura, sin lista ni filtros.
-  var fia = (t==='FIA');
+  document.getElementById('tab-cob').className='tab'+(t==='COB'?' active':'');
+  // Pestañas "Factura IA" y "Cobranza": pantallas de captura, sin lista ni filtros.
+  var fia = (t==='FIA'), cob = (t==='COB');
   document.getElementById('fia-screen').style.display = fia ? 'block' : 'none';
-  document.getElementById('lista-wrap').style.display = fia ? 'none' : 'block';
-  document.querySelector('.filtros').style.display = fia ? 'none' : '';
-  if(fia){ document.getElementById('estadofiltro').style.display='none'; return; }
+  document.getElementById('cob-screen').style.display = cob ? 'block' : 'none';
+  document.getElementById('lista-wrap').style.display = (fia||cob) ? 'none' : 'block';
+  document.querySelector('.filtros').style.display = (fia||cob) ? 'none' : '';
+  if(fia||cob){ document.getElementById('estadofiltro').style.display='none'; if(cob) cargarUltCob(); return; }
   document.getElementById('busca').placeholder =
     (t==='DDJJ') ? 'Buscar régimen / empresa…' :
     (t==='DDJJP') ? 'Buscar impuesto / empresa…' : 'Buscar N° / proveedor…';
@@ -277,6 +309,97 @@ function subirFacturaIA(){
      b.disabled=false; b.textContent='Subir factura';
      toast('❌ ' + ((e && e.message) ? e.message : 'reintentá'));
    });
+}
+
+// ── Cobranza: varias fotos/PDF → bandeja_cobranzas (Cobranzas OSECAC) ───────
+var cobArch = [];   // [{data(dataURL), tipo, nombre}]
+function _cobComprimir(f){            // imagen → JPEG ≤1600px (si falla, el archivo tal cual)
+  return new Promise(function(ok){
+    function crudo(){ var rd=new FileReader(); rd.onload=function(){ ok(rd.result); }; rd.onerror=function(){ ok(null); }; rd.readAsDataURL(f); }
+    function redim(src,w0,h0){
+      try{
+        var max=1600,w=w0,h=h0;
+        if(w>h && w>max){ h=Math.round(h*max/w); w=max; } else if(h>=w && h>max){ w=Math.round(w*max/h); h=max; }
+        var c=document.createElement('canvas'); c.width=w; c.height=h;
+        c.getContext('2d').drawImage(src,0,0,w,h);
+        var u=c.toDataURL('image/jpeg',0.7);
+        if(!u||u.length<200) crudo(); else ok(u);
+      }catch(e){ crudo(); }
+    }
+    function viaImg(){ var i=new Image(),u=URL.createObjectURL(f); i.onload=function(){ redim(i,i.width,i.height); URL.revokeObjectURL(u); }; i.onerror=crudo; i.src=u; }
+    if(window.createImageBitmap){
+      createImageBitmap(f).then(function(b){ redim(b,b.width,b.height); if(b.close) b.close(); }).catch(viaImg);
+    } else { viaImg(); }
+  });
+}
+function _cobAgregar(files){
+  var fs=[].slice.call(files||[]);
+  if(!fs.length) return;
+  var b=document.getElementById('btncob'); b.disabled=true; b.textContent='Procesando…';
+  Promise.all(fs.map(function(f){
+    var esPdf = (f.type==='application/pdf') || /\.pdf$/i.test(f.name||'');
+    if(esPdf){
+      if(f.size>6*1024*1024){ toast('❌ '+f.name+' pesa más de 6 MB'); return Promise.resolve(null); }
+      return new Promise(function(ok){ var rd=new FileReader(); rd.onload=function(){ ok({data:rd.result,tipo:'application/pdf',nombre:f.name}); }; rd.onerror=function(){ ok(null); }; rd.readAsDataURL(f); });
+    }
+    return _cobComprimir(f).then(function(u){ return u ? {data:u,tipo:'image/jpeg',nombre:f.name||'foto.jpg'} : null; });
+  })).then(function(r){
+    r.forEach(function(a){ if(a && cobArch.length<10) cobArch.push(a); });
+    _cobPintar();
+  });
+}
+function _cobPintar(){
+  var l=document.getElementById('cob-lista'); l.innerHTML='';
+  cobArch.forEach(function(a,i){
+    var vis = a.tipo==='application/pdf' ? '<div class="pdf">📄</div>' : '<img src="'+a.data+'">';
+    var d=el('<div class="ca">'+vis+'<span class="nm">'+(i+1)+'. '+esc(a.nombre)+'</span><button aria-label="Quitar">✕</button></div>');
+    d.querySelector('button').onclick=function(){ cobArch.splice(i,1); _cobPintar(); };
+    l.appendChild(d);
+  });
+  var b=document.getElementById('btncob');
+  b.disabled=!cobArch.length;
+  b.textContent = cobArch.length ? ('Subir cobranza ('+cobArch.length+' archivo'+(cobArch.length>1?'s':'')+')') : 'Subir cobranza';
+}
+document.getElementById('file-cob').onchange=function(ev){ _cobAgregar(ev.target.files); ev.target.value=''; };
+document.getElementById('file-cob-cam').onchange=function(ev){ _cobAgregar(ev.target.files); ev.target.value=''; };
+function subirCobranza(){
+  if(!cobArch.length) return;
+  var b=document.getElementById('btncob'); b.disabled=true; b.textContent='Subiendo…';
+  var body={empresa:document.getElementById('cob-empresa').value,
+            nota:document.getElementById('cob-nota').value,
+            archivos:cobArch.map(function(a){ return {data:a.data.split(',')[1], tipo:a.tipo, nombre:a.nombre}; })};
+  fetchJSON(API+'/subir-cobranza',{method:'POST',headers:{'Content-Type':'application/json','x-pin':pin()},
+    body:JSON.stringify(body)}, 1, 60000)
+   .then(no401).then(function(r){ return r.json().catch(function(){ return {}; }); })
+   .then(function(res){
+     if(res && res.error){ throw new Error(res.error); }
+     toast('✅ Cobranza subida. Procesala en la PC.');
+     cobArch=[]; _cobPintar();
+     document.getElementById('cob-nota').value='';
+     cargarUltCob();
+   })
+   .catch(function(e){
+     if(e==='pin') return;
+     _cobPintar();
+     toast('❌ ' + ((e && e.message) ? e.message : 'reintentá'));
+   });
+}
+function cargarUltCob(){
+  var c=document.getElementById('cob-ult');
+  fetchJSON(API+'/cobranzas-cel',{headers:{'x-pin':pin()}}, 1, 20000)
+   .then(no401).then(function(r){ return r.json(); })
+   .then(function(d){
+     var xs=(d&&d.cobranzas)||[];
+     if(!xs.length){ c.innerHTML='<p class="muted">Todavía no subiste cobranzas.</p>'; return; }
+     var col={pendiente:'#fbbf24',procesada:'#34d399',descartada:'#94a3b8'};
+     c.innerHTML=xs.map(function(x){
+       var est = x.estado==='procesada' ? ('✓ procesada'+(x.orden_pago?(' · OP '+esc(x.orden_pago)):'')) : x.estado==='descartada' ? 'descartada' : '⏳ pendiente';
+       return '<div class="cu"><span class="es" style="color:'+(col[x.estado]||'#fff')+'">'+est+'</span>'
+         +'#'+x.id+' · '+fechaTxt(x.subido_en)+' · '+x.archivos+' arch.'
+         +(x.empresa?('<br><b>'+esc(x.empresa)+'</b>'):'')+(x.nota?('<br><span style="color:#94a3b8">'+esc(x.nota)+'</span>'):'')+'</div>';
+     }).join('');
+   })
+   .catch(function(e){ if(e!=='pin') c.innerHTML='<p class="muted">No pude leer las últimas subidas.</p>'; });
 }
 function setEstadoFisc(v){
   estadoFisc=v;

@@ -191,6 +191,59 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true });
     }
 
+    // ── Cobranza desde el celular → bandeja_cobranzas (Cobranzas OSECAC) ───
+    // Una cobranza = 1..N archivos (fotos de la OP del cliente, del aviso de
+    // transferencia, de los certificados de retención, o un PDF). Quedan en
+    // `comprobantes/cobranzas/<uuid>/` y la PC decide procesarla con IA o manual.
+    if (req.method === "POST" && path.endsWith("/subir-cobranza")) {
+      const deny = await auth(req); if (deny) return deny;
+      const body = await req.json();
+      const arch = Array.isArray(body.archivos) ? body.archivos : [];
+      if (!arch.length) return json({ error: "faltan archivos" }, 400);
+      if (arch.length > 10) return json({ error: "Máximo 10 archivos por cobranza" }, 400);
+      let total = 0;
+      for (const a of arch) total += String(a?.data || "").length;
+      if (total > 9_000_000) {
+        return json({ error: "Los archivos pesan demasiado juntos. Subí menos fotos o un PDF más liviano." }, 413);
+      }
+      const carpeta = "cobranzas/" + crypto.randomUUID() + "/";
+      const subidos: { path: string; tipo: string; nombre: string }[] = [];
+      for (let i = 0; i < arch.length; i++) {
+        const a = arch[i] || {};
+        const data = String(a.data || "");
+        if (!data) continue;
+        const esPdf = String(a.tipo || "") === "application/pdf";
+        const tipo = esPdf ? "application/pdf" : "image/jpeg";
+        const p = carpeta + String(i + 1).padStart(2, "0") + (esPdf ? ".pdf" : ".jpg");
+        const up = await supabase.storage.from("comprobantes").upload(
+          p, bytesDeBase64(data), { contentType: tipo });
+        if (up.error) return json({ error: up.error.message }, 500);
+        subidos.push({ path: p, tipo, nombre: String(a.nombre || "").slice(0, 120) });
+      }
+      if (!subidos.length) return json({ error: "faltan archivos" }, 400);
+      const empresa = String(body.empresa || "").trim().slice(0, 60) || null;
+      const nota = String(body.nota || "").trim().slice(0, 500) || null;
+      const ins = await supabase.from("bandeja_cobranzas")
+        .insert({ archivos: subidos, empresa, nota, origen: "celular" }).select("id").single();
+      if (ins.error) return json({ error: ins.error.message }, 500);
+      return json({ ok: true, id: ins.data?.id });
+    }
+
+    // Últimas cobranzas subidas (para ver en el celular si ya se procesaron).
+    if (req.method === "GET" && path.endsWith("/cobranzas-cel")) {
+      const deny = await auth(req); if (deny) return deny;
+      const { data, error } = await supabase.from("bandeja_cobranzas")
+        .select("id, subido_en, empresa, nota, estado, orden_pago, archivos")
+        .order("subido_en", { ascending: false }).limit(30);
+      if (error) return json({ error: error.message }, 500);
+      const cobranzas = (data ?? []).map((r) => ({
+        id: r.id, subido_en: r.subido_en, empresa: r.empresa, nota: r.nota,
+        estado: r.estado, orden_pago: r.orden_pago,
+        archivos: Array.isArray(r.archivos) ? r.archivos.length : 0,
+      }));
+      return json({ cobranzas });
+    }
+
     // ── DDJJ PROPIAS (Anticipos / CM03 / IVA): pagadas + pendientes ───────
     // Son las DDJJ que el estudio paga por sí mismo (tabla ddjj_propias), no
     // las de agente de recaudación. Se listan todas con `pagada` (= ya tiene
@@ -449,7 +502,7 @@ Deno.serve(async (req: Request) => {
 
     return json({
       ok: true,
-      info: "API comprobantes-cel: GET /ordenes?estado=PENDIENTE|PAGADA, GET /ddjj, GET /ddjj-propias, GET /archivos?tipo=orden|ddjj|ddjjp (orden: + ficha), POST /subir, POST /subir-factura-ia, POST /subir-ddjj, POST /subir-ddjj-propias (header x-pin)",
+      info: "API comprobantes-cel: GET /ordenes?estado=PENDIENTE|PAGADA, GET /ddjj, GET /ddjj-propias, GET /archivos?tipo=orden|ddjj|ddjjp (orden: + ficha), POST /subir, POST /subir-factura-ia, POST /subir-cobranza, GET /cobranzas-cel, POST /subir-ddjj, POST /subir-ddjj-propias (header x-pin)",
     });
   } catch (e) {
     return json({ error: String(e) }, 500);
