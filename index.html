@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Comprobantes de pago</title>
+<!-- Basado en Lucian UX/UI Prompt #026/#075/#081 · MIT (c) 2026 Seokwoooo -->
 <style>
 *{box-sizing:border-box}
 body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0}
@@ -81,7 +82,42 @@ button.big:disabled{background:#475569;color:#94a3b8}
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#334155;color:#fff;padding:12px 18px;border-radius:24px;font-size:15px;opacity:0;transition:.25s;z-index:20}
 #toast.show{opacity:1}
 #pin-screen{display:none;position:fixed;inset:0;background:#0f172a;z-index:30;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center}
-#pin-input{width:100%;max-width:260px;padding:12px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;font-size:20px;text-align:center;letter-spacing:2px}
+/* PIN por casillas (4 dígitos): avance solo, tiembla si está mal, verde si entra.
+   Se tipea con type=text + text-security para que el teclado sea numérico también
+   en iOS (con type=password ignora inputmode). */
+.pins{display:flex;gap:10px;justify-content:center;margin:6px 0 2px}
+.pins input{width:54px;height:62px;padding:0;text-align:center;font-size:26px;font-weight:bold;font-family:inherit;border:1.5px solid #334155;border-radius:10px;background:#1e293b;color:#e2e8f0;-webkit-text-security:disc;text-security:disc;transition:border-color .2s,transform .25s cubic-bezier(.34,1.56,.64,1),background .3s,color .3s}
+.pins input:focus{border-color:#0ea5e9;outline:none;transform:translateY(-2px)}
+.pins input.good{border-color:#34d399;background:#14532d;color:#86efac}
+.pins.bloq input{opacity:.45}
+.pins.shake{animation:pinshake .45s}
+@keyframes pinshake{20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
+#pin-err{margin-top:12px}
+/* Subida con progreso: tarjeta con barra + MB; al terminar, aro que se cierra y check. */
+.up{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px;margin-top:12px}
+.up[hidden],.up [hidden]{display:none!important}
+.up .nm{display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:8px}
+.up .bar{height:6px;background:#334155;border-radius:3px;overflow:hidden}
+.up .bar i{display:block;height:100%;width:0;background:#0ea5e9;border-radius:3px;transition:width .2s linear,background .2s}
+.up.prep .bar i{width:30%;animation:upprep 1.1s ease-in-out infinite}
+@keyframes upprep{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
+.up.fallo .bar i{background:#f87171}
+.up-meta{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:#94a3b8;margin-top:6px;font-variant-numeric:tabular-nums}
+.up .fin{display:flex;flex-direction:column;align-items:center;gap:6px;padding:4px 0 2px;text-align:center}
+.up .ok-msg{margin:0;font-size:15px}
+.up .err-msg{margin:10px 0 0;color:#f87171;font-size:14px;text-align:center}
+.up .re{display:block;margin:10px auto 0;padding:9px 16px;border:1px solid #0ea5e9;border-radius:8px;background:none;color:#38bdf8;font-size:14px;font-weight:bold}
+.ring{width:64px;height:64px}
+.ring circle{fill:none;stroke:#34d399;stroke-width:3;stroke-dasharray:176;stroke-dashoffset:176;transform:rotate(-90deg);transform-origin:center}
+.ring path{fill:none;stroke:#34d399;stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:40;stroke-dashoffset:40}
+.ring.on circle{transition:stroke-dashoffset .6s cubic-bezier(.2,.8,.2,1);stroke-dashoffset:0}
+.ring.on path{transition:stroke-dashoffset .35s cubic-bezier(.2,.8,.2,1) .5s;stroke-dashoffset:0}
+@media (prefers-reduced-motion: reduce){
+  .pins.shake{animation:none}
+  .pins input,.up .bar i{transition:none}
+  .up.prep .bar i{animation:none;width:100%;opacity:.4}
+  .ring.on circle,.ring.on path{transition:none}
+}
 #cob-lista .ca{display:flex;align-items:center;gap:10px;background:#1e293b;border:1px solid #334155;border-radius:8px;padding:6px;margin-bottom:6px}
 #cob-lista .ca img{width:54px;height:54px;object-fit:cover;border-radius:6px}
 #cob-lista .ca .pdf{width:54px;height:54px;display:flex;align-items:center;justify-content:center;font-size:26px;background:#0f172a;border-radius:6px}
@@ -99,9 +135,14 @@ button.big:disabled{background:#475569;color:#94a3b8}
 <div id="pin-screen">
   <h1>Comprobantes de pago</h1>
   <p class="muted">Ingresá el PIN (solo la primera vez)</p>
-  <input id="pin-input" type="password" inputmode="text" placeholder="PIN" onkeydown="if(event.key==='Enter')guardarPin()">
-  <p id="pin-err" class="err" style="display:none">PIN incorrecto</p>
-  <button class="big" style="max-width:260px;margin-top:16px" onclick="guardarPin()">Entrar</button>
+  <div class="pins" id="pins" role="group" aria-label="PIN de 4 dígitos">
+    <input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" aria-label="Dígito 1 del PIN">
+    <input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="Dígito 2 del PIN">
+    <input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="Dígito 3 del PIN">
+    <input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="Dígito 4 del PIN">
+  </div>
+  <p id="pin-err" class="err" style="display:none" aria-live="polite">PIN incorrecto</p>
+  <button class="big" id="pin-btn" style="max-width:260px;margin-top:16px" onclick="guardarPin()">Entrar</button>
 </div>
 
 <header>
@@ -196,32 +237,208 @@ function show(id){ document.getElementById('detalle').style.display = (id==='det
 function volver(){ show('lista'); }
 function toast(t){ var e=document.getElementById('toast'); e.textContent=t; e.className='show'; setTimeout(function(){e.className='';},2200); }
 
-function mostrarPin(err){
+var REDUCIR = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+// ── PIN por casillas ─────────────────────────────────────────────────────────
+// El PIN se valida contra la Edge Function al cargar la lista: guardarPin() lo
+// guarda y llama a cargar(); si vuelve 401/429, no401() reabre esta pantalla.
+var PIN_LEN = 4, pinVerif = false, pinBloqT = null;
+function pinCasillas(){ return [].slice.call(document.querySelectorAll('#pins input')); }
+function pinValor(){ return pinCasillas().map(function(i){ return i.value; }).join(''); }
+function pinLimpiar(){ pinCasillas().forEach(function(i){ i.value=''; i.classList.remove('good'); }); }
+function pinEstado(habil){             // habil: true | 'leyendo' (solo lectura) | false (bloqueado)
+  var w=document.getElementById('pins');
+  pinCasillas().forEach(function(i){ i.disabled=(habil===false); i.readOnly=(habil==='leyendo'); });
+  document.getElementById('pin-btn').disabled=(habil!==true);
+  w.classList.toggle('bloq', habil===false);
+}
+function mostrarPin(err, bloqueoSeg){
+  var sacudir = pinVerif && !!err;     // solo tiembla si el usuario recién lo tipeó
+  pinVerif=false;
   var pe=document.getElementById('pin-err');
   pe.textContent = (typeof err==='string') ? err : 'PIN incorrecto';
   pe.style.display = err?'block':'none';
   var s=document.getElementById('pin-screen'); s.style.display='flex';
-  var i=document.getElementById('pin-input'); i.value=''; i.focus();
+  var w=document.getElementById('pins'), ins=pinCasillas();
+  clearTimeout(pinBloqT);
+  if(bloqueoSeg){                      // 429: casillas deshabilitadas hasta que pase la espera
+    pinLimpiar(); pinEstado(false);
+    pinBloqT=setTimeout(function(){ pinEstado(true); pe.style.display='none'; ins[0].focus(); }, bloqueoSeg*1000);
+    return;
+  }
+  pinEstado(true);
+  if(sacudir && !REDUCIR){
+    w.classList.remove('shake'); void w.offsetWidth; w.classList.add('shake');
+    setTimeout(function(){ w.classList.remove('shake'); pinLimpiar(); ins[0].focus(); }, 450);
+  } else { pinLimpiar(); ins[0].focus(); }
 }
 function guardarPin(){
-  var v=document.getElementById('pin-input').value.trim();
-  if(!v) return;
+  var v=pinValor().trim();
+  if(!v || pinVerif) return;
   localStorage.setItem(PINKEY, v);
-  document.getElementById('pin-screen').style.display='none';
+  pinVerif=true; pinEstado('leyendo');
+  document.getElementById('pin-err').style.display='none';
   cargar();
 }
+// Lo llama cargar(): ok=true → casillas en verde una por una y entra; ok=false
+// (error de red, no de PIN) → se cierra la pantalla como antes y la lista
+// muestra su propio "No se pudo cargar / Reintentar".
+function pinResultado(ok){
+  if(!pinVerif) return;
+  pinVerif=false;
+  var s=document.getElementById('pin-screen'), ins=pinCasillas();
+  function cerrar(){ s.style.display='none'; pinLimpiar(); pinEstado(true); }
+  if(!ok){ cerrar(); return; }
+  ins.forEach(function(i,k){ setTimeout(function(){ i.classList.add('good'); }, REDUCIR?0:k*90); });
+  setTimeout(cerrar, REDUCIR ? 150 : ins.length*90+380);
+}
+(function(){
+  var ins=pinCasillas();
+  function completo(){ if(pinValor().length===PIN_LEN) guardarPin(); }
+  function llenar(d){                  // pegar / autocompletar el PIN entero
+    ins.forEach(function(x,j){ x.value=d[j]||''; });
+    ins[Math.min(d.length, PIN_LEN)-1].focus();
+    completo();
+  }
+  ins.forEach(function(inp,k){
+    inp.addEventListener('focus', function(){ try{ inp.select(); }catch(_){} });
+    inp.addEventListener('beforeinput', function(){ inp._prev = inp.value; });
+    inp.addEventListener('input', function(){
+      var d=inp.value.replace(/\D/g,''), prev=(inp._prev||'').replace(/\D/g,'');
+      if(d.length>=PIN_LEN){ llenar(d.slice(0,PIN_LEN)); return; }
+      if(d.length===2 && prev.length===1 && d.indexOf(prev)>=0){ d=d.replace(prev,''); }   // tipeó sobre una casilla llena
+      if(d.length>1){                  // varios dígitos de golpe: se reparten hacia adelante
+        for(var j=0;j<d.length && k+j<PIN_LEN;j++) ins[k+j].value=d[j];
+        ins[Math.min(k+d.length, PIN_LEN-1)].focus();
+        completo(); return;
+      }
+      inp.value=d;
+      if(d && k<PIN_LEN-1) ins[k+1].focus();
+      completo();
+    });
+    inp.addEventListener('keydown', function(e){
+      if(e.key==='Backspace' && !inp.value && k>0){ e.preventDefault(); ins[k-1].value=''; ins[k-1].focus(); }
+      else if(e.key==='ArrowLeft' && k>0){ e.preventDefault(); ins[k-1].focus(); }
+      else if(e.key==='ArrowRight' && k<PIN_LEN-1){ e.preventDefault(); ins[k+1].focus(); }
+      else if(e.key==='Enter'){ guardarPin(); }
+    });
+    inp.addEventListener('paste', function(e){
+      var t=((e.clipboardData||window.clipboardData).getData('text')||'').replace(/\D/g,'');
+      if(!t) return;
+      e.preventDefault();
+      if(t.length>=PIN_LEN){ llenar(t.slice(0,PIN_LEN)); return; }
+      for(var j=0;j<t.length && k+j<PIN_LEN;j++) ins[k+j].value=t[j];
+      ins[Math.min(k+t.length, PIN_LEN-1)].focus();
+      completo();
+    });
+  });
+})();
 function no401(r){
-  if(r.status===401){ localStorage.removeItem(PINKEY); mostrarPin(true); throw 'pin'; }
+  if(r.status===401){
+    localStorage.removeItem(PINKEY);
+    return r.json().catch(function(){ return {}; }).then(function(d){
+      var q = (d && d.restantes!=null) ? Number(d.restantes) : null;
+      var m = 'PIN incorrecto' + ((q!=null && q>=0) ? (q===1 ? ' · te queda 1 intento' : ' · te quedan '+q+' intentos') : '');
+      mostrarPin(m);
+      throw 'pin';
+    });
+  }
   if(r.status===429){
     // Bloqueo por intentos fallidos (lo aplica la Edge Function por IP).
     localStorage.removeItem(PINKEY);
     return r.json().catch(function(){ return {}; }).then(function(d){
-      var min=Math.max(1, Math.ceil((d.espera||900)/60));
-      mostrarPin('Demasiados intentos. Esperá '+min+' min y volvé a probar.');
+      var seg=(d.espera||900), min=Math.max(1, Math.ceil(seg/60));
+      mostrarPin('Demasiados intentos. Esperá '+min+' min y volvé a probar.', seg);
       throw 'pin';
     });
   }
   return r;
+}
+
+// ── Subida con progreso real (XHR) ───────────────────────────────────────────
+// Mismo contrato que fetchJSON (POST JSON con x-pin, timeout por intento y
+// reintento ante corte de red) pero con upload.onprogress para la barra.
+// Devuelve un objeto tipo Response ({status, ok, json()}) para que no401 y el
+// resto de la cadena sigan igual.
+function xhrJSON(url, opts, intentos, ms, onProg){
+  intentos = (intentos==null) ? 2 : intentos;
+  ms = ms || 20000;
+  function attempt(n){
+    return new Promise(function(res, rej){
+      var x=new XMLHttpRequest();
+      x.open(opts.method||'POST', url, true);
+      var h=opts.headers||{}; for(var k in h) x.setRequestHeader(k, h[k]);
+      x.timeout=ms;
+      if(onProg && x.upload) x.upload.onprogress=function(e){ onProg(e.loaded, e.lengthComputable ? e.total : 0); };
+      x.onload=function(){
+        res({status:x.status, ok:(x.status>=200 && x.status<300), json:function(){
+          return new Promise(function(ok, ko){ try{ ok(JSON.parse(x.responseText)); }catch(err){ ko(err); } });
+        }});
+      };
+      x.onerror=function(){ rej(new Error('Sin conexión, reintentá')); };
+      x.ontimeout=function(){ rej(new Error('Tardó demasiado, reintentá')); };
+      x.send(opts.body);
+    }).catch(function(err){
+      if(n>0){ return new Promise(function(r){ setTimeout(r,1200); }).then(function(){ return attempt(n-1); }); }
+      throw err;
+    });
+  }
+  return attempt(intentos);
+}
+var nf1 = new Intl.NumberFormat('es-AR',{minimumFractionDigits:1,maximumFractionDigits:1});
+function mbTxt(b){ return nf1.format((b||0)/1048576); }
+// Tarjeta de subida debajo del botón `btnId`: upUI(id).iniciar(nombre) →
+// .progreso(cargado,total) → .ok(msg) (Promise al terminar el check) | .error(msg, reintentar).
+function upUI(btnId){
+  var b=document.getElementById(btnId), c=b.nextElementSibling;
+  if(!c || !c.classList.contains('up')){
+    c=el('<div class="up" hidden aria-live="polite">'+
+      '<div class="up-file"><span class="nm"></span><div class="bar"><i></i></div>'+
+      '<div class="up-meta"><span class="mb"></span><span class="pct"></span></div></div>'+
+      '<div class="fin" hidden><svg class="ring" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="28"></circle><path d="M20 33l8 8 16-17"></path></svg><p class="ok-msg"></p></div>'+
+      '<p class="err-msg" hidden></p>'+
+      '<button type="button" class="re" hidden>🔄 Reintentar</button></div>');
+    b.insertAdjacentElement('afterend', c);
+  }
+  function q(s){ return c.querySelector(s); }
+  return {
+    iniciar:function(nombre){
+      c.hidden=false; c.className='up prep';
+      q('.nm').textContent=nombre||'archivo';
+      q('.bar i').style.width='';
+      q('.mb').textContent='Preparando…'; q('.pct').textContent='';
+      q('.up-file').hidden=false; q('.fin').hidden=true; q('.ring').classList.remove('on');
+      q('.err-msg').hidden=true; q('.re').hidden=true;
+    },
+    progreso:function(cargado, total){
+      c.className='up';
+      var p = total ? Math.min(1, cargado/total) : 0;
+      q('.bar i').style.width=(p*100)+'%';
+      q('.mb').textContent = total ? (mbTxt(cargado)+' de '+mbTxt(total)+' MB') : (mbTxt(cargado)+' MB');
+      q('.pct').textContent = (p>=1) ? 'Guardando…' : (Math.round(p*100)+'%');
+    },
+    ok:function(msg){
+      c.className='up';
+      q('.bar i').style.width='100%'; q('.pct').textContent='100%';
+      return new Promise(function(fin){
+        setTimeout(function(){
+          q('.up-file').hidden=true; q('.fin').hidden=false;
+          q('.ok-msg').textContent=msg||'';
+          var r=q('.ring'); void r.getBoundingClientRect(); r.classList.add('on');
+          setTimeout(fin, REDUCIR ? 400 : 1300);
+        }, REDUCIR ? 0 : 250);
+      });
+    },
+    error:function(msg, reintentar){
+      c.className='up fallo';
+      var i=q('.bar i'); if(!parseFloat(i.style.width)) i.style.width='100%';
+      q('.pct').textContent='';
+      if(q('.mb').textContent==='Preparando…') q('.mb').textContent='';
+      var e=q('.err-msg'); e.textContent='❌ '+msg; e.hidden=false;
+      var re=q('.re'); re.hidden=!reintentar; re.onclick=reintentar||null;
+    },
+    ocultar:function(){ c.hidden=true; }
+  };
 }
 // fetch con timeout + reintentos: las redes de celular tienen micro-cortes y la
 // Edge Function puede tener cold-start. Sin esto, un solo blip dejaba la pantalla
@@ -276,10 +493,12 @@ function setTab(t){
 }
 
 // ── Factura IA: captura + subida a la bandeja (bandeja_facturas_ia) ──────────
-var imgFia = null;
+var imgFia = null, nomFia = '';
 document.getElementById('file-fia').onchange=function(ev){
   var f = ev.target.files && ev.target.files[0];
   if(!f) return;
+  nomFia = f.name || 'factura.jpg';
+  upUI('btnfia').ocultar();
   var rd = new FileReader();
   rd.onload = function(){
     imgFia = rd.result;
@@ -292,22 +511,26 @@ document.getElementById('file-fia').onchange=function(ev){
 function subirFacturaIA(){
   if(!imgFia) return;
   var b=document.getElementById('btnfia'); b.disabled=true; b.textContent='Subiendo…';
-  fetchJSON(API+'/subir-factura-ia',{method:'POST',
+  var ui=upUI('btnfia'); ui.iniciar(nomFia || 'factura.jpg');
+  xhrJSON(API+'/subir-factura-ia',{method:'POST',
     headers:{'Content-Type':'application/json','x-pin':pin()},
-    body:JSON.stringify({data:imgFia.split(',')[1]})}, 1, 45000)
+    body:JSON.stringify({data:imgFia.split(',')[1]})}, 1, 45000, ui.progreso)
    .then(no401).then(function(r){ return r.json().catch(function(){ return {}; }); })
    .then(function(res){
      if(res && res.error){ throw new Error(res.error); }
      toast('✅ Factura subida. Revisala en la PC.');
+     ui.ok('✅ Factura subida. Revisala en la PC.');
      imgFia=null;
      document.getElementById('file-fia').value='';
      var img=document.getElementById('preview-fia'); img.style.display='none'; img.src='';
      b.disabled=true; b.textContent='Subir factura';
    })
    .catch(function(e){
-     if(e==='pin') return;
+     if(e==='pin'){ ui.ocultar(); b.disabled=false; b.textContent='Subir factura'; return; }
      b.disabled=false; b.textContent='Subir factura';
-     toast('❌ ' + ((e && e.message) ? e.message : 'reintentá'));
+     var msg=(e && e.message) ? e.message : 'reintentá';
+     ui.error(msg, subirFacturaIA);
+     toast('❌ ' + msg);
    });
 }
 
@@ -335,6 +558,7 @@ function _cobComprimir(f){            // imagen → JPEG ≤1600px (si falla, el
 function _cobAgregar(files){
   var fs=[].slice.call(files||[]);
   if(!fs.length) return;
+  upUI('btncob').ocultar();
   var b=document.getElementById('btncob'); b.disabled=true; b.textContent='Procesando…';
   Promise.all(fs.map(function(f){
     var esPdf = (f.type==='application/pdf') || /\.pdf$/i.test(f.name||'');
@@ -365,23 +589,28 @@ document.getElementById('file-cob-cam').onchange=function(ev){ _cobAgregar(ev.ta
 function subirCobranza(){
   if(!cobArch.length) return;
   var b=document.getElementById('btncob'); b.disabled=true; b.textContent='Subiendo…';
+  var ui=upUI('btncob');
+  ui.iniciar(cobArch.length===1 ? cobArch[0].nombre : (cobArch.length+' archivos'));
   var body={empresa:document.getElementById('cob-empresa').value,
             nota:document.getElementById('cob-nota').value,
             archivos:cobArch.map(function(a){ return {data:a.data.split(',')[1], tipo:a.tipo, nombre:a.nombre}; })};
-  fetchJSON(API+'/subir-cobranza',{method:'POST',headers:{'Content-Type':'application/json','x-pin':pin()},
-    body:JSON.stringify(body)}, 1, 60000)
+  xhrJSON(API+'/subir-cobranza',{method:'POST',headers:{'Content-Type':'application/json','x-pin':pin()},
+    body:JSON.stringify(body)}, 1, 60000, ui.progreso)
    .then(no401).then(function(r){ return r.json().catch(function(){ return {}; }); })
    .then(function(res){
      if(res && res.error){ throw new Error(res.error); }
      toast('✅ Cobranza subida. Procesala en la PC.');
+     ui.ok('✅ Cobranza subida. Procesala en la PC.');
      cobArch=[]; _cobPintar();
      document.getElementById('cob-nota').value='';
      cargarUltCob();
    })
    .catch(function(e){
-     if(e==='pin') return;
+     if(e==='pin'){ ui.ocultar(); _cobPintar(); return; }
      _cobPintar();
-     toast('❌ ' + ((e && e.message) ? e.message : 'reintentá'));
+     var msg=(e && e.message) ? e.message : 'reintentá';
+     ui.error(msg, subirCobranza);
+     toast('❌ ' + msg);
    });
 }
 function cargarUltCob(){
@@ -434,9 +663,11 @@ function cargar(){
      else if(tab==='DDJJP'){ ordenes=(d.ddjj||[]).map(function(x){ x._ddjjp=true; return x; }); }
      else { ordenes=d.ordenes||[]; }
      llenarEmpresas(); if(esFiscal(tab)) llenarPeriodos(); render();
+     pinResultado(true);
    })
    .catch(function(e){
      if(e==='pin') return;
+     pinResultado(false);
      var msg = (e && e.message) ? e.message : 'Revisá la conexión.';
      document.getElementById('lista').innerHTML =
        '<div class="err">No se pudo cargar.'+
@@ -507,6 +738,7 @@ function abrir(o){
   document.getElementById('file').value='';
   document.getElementById('btnsubir').disabled=true;
   document.getElementById('btnsubir').textContent='Subir foto';
+  upUI('btnsubir').ocultar();
 
   // Qué mostrar: las órdenes siempre dejan ver documentos y subir (comprobantes
   // parciales). Una DDJJ ya pagada solo se ve (no se re-sube); una pendiente
@@ -749,26 +981,37 @@ function procesarFoto(f){
     }).catch(function(){ _viaImg(f); });
   } else { _viaImg(f); }
 }
+var imgNombre = '';
 document.getElementById('file').onchange=function(ev){
   var f=ev.target.files && ev.target.files[0]; if(!f) return;
+  imgNombre = f.name || 'comprobante.jpg';
+  upUI('btnsubir').ocultar();
   procesarFoto(f);
 };
 function subir(){
   if(!sel||!imgData) return;
   var b=document.getElementById('btnsubir'); b.disabled=true; b.textContent='Subiendo…';
+  var ui=upUI('btnsubir'); ui.iniciar(imgNombre || 'comprobante.jpg');
   var ep = sel._ddjjp ? '/subir-ddjj-propias' : sel._ddjj ? '/subir-ddjj' : '/subir';
+  var orden = sel;
   // 1 reintento y timeout 45s: subir una foto por datos móviles lentos tarda.
-  fetchJSON(API+ep,{method:'POST',headers:{'Content-Type':'application/json','x-pin':pin()},
-    body:JSON.stringify({pago_id:sel.pago_id, data:imgData.split(',')[1]})}, 1, 45000)
+  xhrJSON(API+ep,{method:'POST',headers:{'Content-Type':'application/json','x-pin':pin()},
+    body:JSON.stringify({pago_id:sel.pago_id, data:imgData.split(',')[1]})}, 1, 45000, ui.progreso)
    .then(no401).then(function(r){ return r.json().catch(function(){ return {}; }); })
    .then(function(res){
      if(res && res.error){ throw new Error(res.error); }
-     toast('✅ Comprobante subido'); volver(); cargar();
+     // Se deja ver el check un instante antes de volver a la lista.
+     return ui.ok('✅ Comprobante subido').then(function(){
+       toast('✅ Comprobante subido');
+       if(sel===orden) volver();
+       cargar();
+     });
    })
    .catch(function(e){
-     if(e==='pin') return;
+     if(e==='pin'){ ui.ocultar(); b.disabled=false; b.textContent='Subir foto'; return; }
      b.disabled=false; b.textContent='Subir foto';
      var msg = (e && e.message) ? e.message : 'reintentá';
+     ui.error(msg, subir);
      toast('❌ ' + msg);
    });
 }
