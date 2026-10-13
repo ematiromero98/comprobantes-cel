@@ -624,7 +624,7 @@ function cargarUltCob(){
      c.innerHTML=xs.map(function(x){
        var est = x.estado==='procesada' ? ('✓ procesada'+(x.orden_pago?(' · OP '+esc(x.orden_pago)):'')) : x.estado==='descartada' ? 'descartada' : '⏳ pendiente';
        return '<div class="cu"><span class="es" style="color:'+(col[x.estado]||'#fff')+'">'+est+'</span>'
-         +'#'+x.id+' · '+fechaTxt(x.subido_en)+' · '+x.archivos+' arch.'
+         +'#'+esc(x.id)+' · '+esc(fechaTxt(x.subido_en))+' · '+esc(x.archivos)+' arch.'
          +(x.empresa?('<br><b>'+esc(x.empresa)+'</b>'):'')+(x.nota?('<br><span style="color:#94a3b8">'+esc(x.nota)+'</span>'):'')+'</div>';
      }).join('');
    })
@@ -640,14 +640,14 @@ function llenarPeriodos(){
   var sel=document.getElementById('periodo'); var prev=sel.value, set={};
   ordenes.forEach(function(o){ if(o.periodo) set[o.periodo]=1; });
   var ps=Object.keys(set).sort().reverse();
-  sel.innerHTML='<option value="">Todos los períodos</option>'+ps.map(function(p){return '<option value="'+p+'">'+periodoTxt(p)+'</option>';}).join('');
+  sel.innerHTML='<option value="">Todos los períodos</option>'+ps.map(function(p){return '<option value="'+esc(p)+'">'+esc(periodoTxt(p))+'</option>';}).join('');
   sel.value=(prev && set[prev])?prev:'';
 }
 function llenarEmpresas(){
   var sel=document.getElementById('empresa'); var prev=sel.value, set={};
   ordenes.forEach(function(o){ if(o.empresa) set[o.empresa]=1; });
   var emps=Object.keys(set).sort();
-  sel.innerHTML='<option value="">Todas</option>'+emps.map(function(e){return '<option>'+e+'</option>';}).join('');
+  sel.innerHTML='<option value="">Todas</option>'+emps.map(function(e){return '<option value="'+esc(e)+'">'+esc(e)+'</option>';}).join('');
   sel.value = (prev && set[prev]) ? prev : '';
 }
 function cargar(){
@@ -705,23 +705,23 @@ function render(){
   items.forEach(function(o){
     var d=document.createElement('div'); d.className='card';
     if(esDdjj){
-      d.innerHTML='<div class="row"><b>'+(o.regimen||'')+'</b><span>'+badgeEstado(o.pagada)+' <span class="tag">'+(o.quincena||'')+'</span></span></div>'+
-        '<div class="prov">'+(o.empresa||'')+'</div>'+
-        '<div class="meta">Período '+periodoTxt(o.periodo)+(o.fecha?(' · pago '+o.fecha):'')+'</div>'+
+      d.innerHTML='<div class="row"><b>'+esc(o.regimen)+'</b><span>'+badgeEstado(o.pagada)+' <span class="tag">'+esc(o.quincena)+'</span></span></div>'+
+        '<div class="prov">'+esc(o.empresa)+'</div>'+
+        '<div class="meta">Período '+esc(periodoTxt(o.periodo))+(o.fecha?(' · pago '+esc(o.fecha)):'')+'</div>'+
         '<div class="saldo">'+money(o.monto)+'</div>';
     } else if(esP){
-      d.innerHTML='<div class="row"><b>'+impTxt(o.impuesto)+'</b>'+badgeEstado(o.pagada)+'</div>'+
-        '<div class="prov">'+(o.empresa||'')+'</div>'+
-        '<div class="meta">Período '+periodoTxt(o.periodo)+(o.fecha?(' · pago '+o.fecha):'')+'</div>'+
+      d.innerHTML='<div class="row"><b>'+esc(impTxt(o.impuesto))+'</b>'+badgeEstado(o.pagada)+'</div>'+
+        '<div class="prov">'+esc(o.empresa)+'</div>'+
+        '<div class="meta">Período '+esc(periodoTxt(o.periodo))+(o.fecha?(' · pago '+esc(o.fecha)):'')+'</div>'+
         '<div class="saldo">'+money(o.monto)+'</div>';
     } else {
-      var badge=(o.comprobantes>0)?'<span class="badge">📎 '+o.comprobantes+'</span>':'';
+      var badge=(o.comprobantes>0)?'<span class="badge">📎 '+esc(o.comprobantes)+'</span>':'';
       var linea = (tab==='PENDIENTE')
         ? '<div class="saldo">Saldo: '+money(o.saldo)+'</div>'
-        : '<div class="saldo">Total: '+money(o.total_a_pagar)+'<span class="tag">'+(o.estado_pago||'')+'</span></div>';
-      d.innerHTML='<div class="row"><b>'+(o.nro_op||'')+'</b>'+badge+'</div>'+
-        '<div class="prov">'+(o.proveedor||'')+'</div>'+
-        '<div class="meta">'+(o.empresa||'')+' · '+(o.fecha||'')+'</div>'+ linea;
+        : '<div class="saldo">Total: '+money(o.total_a_pagar)+'<span class="tag">'+esc(o.estado_pago)+'</span></div>';
+      d.innerHTML='<div class="row"><b>'+esc(o.nro_op)+'</b>'+badge+'</div>'+
+        '<div class="prov">'+esc(o.proveedor)+'</div>'+
+        '<div class="meta">'+esc(o.empresa)+' · '+esc(o.fecha)+'</div>'+ linea;
     }
     d.onclick=function(){ abrir(o); };
     cont.appendChild(d);
